@@ -1,0 +1,71 @@
+name: Purge All Actions Artifacts
+
+on:
+  push:
+    paths:
+      - '.github/workflows/purge-all-actions-artifacts.yml'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  purge-artifacts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete every Actions artifact in this repository
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -Eeuo pipefail
+
+          mapfile -t ARTIFACTS < <(
+            gh api \
+              --paginate \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${REPOSITORY}/actions/artifacts?per_page=100" \
+              --jq '.artifacts[] | [.id, .name, .size_in_bytes] | @tsv'
+          )
+
+          total=${#ARTIFACTS[@]}
+          bytes=0
+          deleted=0
+          failed=0
+
+          echo "Found ${total} artifact(s)."
+
+          for artifact in "${ARTIFACTS[@]}"; do
+            IFS=$'\t' read -r id name size <<< "$artifact"
+            bytes=$((bytes + size))
+            echo "Deleting artifact ${id}: ${name} (${size} bytes)"
+
+            if gh api \
+              --method DELETE \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${REPOSITORY}/actions/artifacts/${id}"
+            then
+              deleted=$((deleted + 1))
+            else
+              failed=$((failed + 1))
+            fi
+          done
+
+          {
+            echo '## Actions artifact purge'
+            echo
+            echo "- Repository: \`${REPOSITORY}\`"
+            echo "- Artifacts found: **${total}**"
+            echo "- Artifacts deleted: **${deleted}**"
+            echo "- Deletion failures: **${failed}**"
+            echo "- Bytes targeted: **${bytes}**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if (( failed > 0 )); then
+            echo "::error::${failed} artifact deletion(s) failed."
+            exit 1
+          fi
