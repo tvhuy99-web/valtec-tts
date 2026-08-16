@@ -38,7 +38,6 @@ object Diagnostics {
     private lateinit var rootDir: File
     private lateinit var sessionDir: File
     private lateinit var appLog: File
-    private var sessionStartWallMs = 0L
     private var sessionStartElapsedNs = 0L
 
     lateinit var sessionId: String
@@ -52,7 +51,6 @@ object Diagnostics {
             sessionId = sessionName()
             sessionDir = File(rootDir, sessionId).apply { mkdirs() }
             appLog = File(sessionDir, "app.jsonl")
-            sessionStartWallMs = System.currentTimeMillis()
             sessionStartElapsedNs = SystemClock.elapsedRealtimeNanos()
             initialized = true
             pruneOldSessionsLocked()
@@ -125,7 +123,7 @@ object Diagnostics {
         return Span(category, event, data)
     }
 
-    inner class Span internal constructor(
+    class Span internal constructor(
         private val category: String,
         private val event: String,
         private val startData: Map<String, Any?>
@@ -137,8 +135,10 @@ object Diagnostics {
         private var ended = false
 
         init {
-            log(category, "$event.begin", data = startData, snapshot = true)
+            Diagnostics.log(category, "$event.begin", data = startData, snapshot = true)
         }
+
+        fun elapsedMs(): Double = (SystemClock.elapsedRealtimeNanos() - startNs) / 1_000_000.0
 
         fun end(success: Boolean = true, data: Map<String, Any?> = emptyMap()) {
             if (ended) return
@@ -154,7 +154,7 @@ object Diagnostics {
             merged["process_cpu_ms"] = endCpuMs - startCpuMs
             if (startPssKb >= 0 && endPssKb >= 0) merged["pss_delta_kb"] = endPssKb - startPssKb
             merged["native_heap_delta_bytes"] = endNativeHeap - startNativeHeap
-            log(category, "$event.end", if (success) "INFO" else "ERROR", merged, snapshot = true)
+            Diagnostics.log(category, "$event.end", if (success) "INFO" else "ERROR", merged, snapshot = true)
         }
     }
 
@@ -324,10 +324,6 @@ object Diagnostics {
         val am = appContext.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         val memInfo = ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }
         val stat = StatFs(appContext.filesDir.absolutePath)
-        val cpuFreqs = (0 until Runtime.getRuntime().availableProcessors()).mapNotNull { cpu ->
-            val value = readText("/sys/devices/system/cpu/cpu$cpu/cpufreq/scaling_cur_freq")?.toLongOrNull()
-            value?.let { mapOf("cpu" to cpu, "khz" to it) }
-        }
         return linkedMapOf(
             "manufacturer" to Build.MANUFACTURER,
             "brand" to Build.BRAND,
@@ -346,7 +342,7 @@ object Diagnostics {
             "low_memory" to memInfo.lowMemory,
             "app_storage_free_bytes" to stat.availableBytes,
             "app_storage_total_bytes" to stat.totalBytes,
-            "cpu_frequencies" to cpuFreqs,
+            "cpu_frequencies_khz" to cpuFrequencies(),
             "battery" to batterySnapshot(),
             "thermal" to thermalSnapshot()
         )
@@ -365,10 +361,24 @@ object Diagnostics {
             "java_heap_max_bytes" to runtime.maxMemory(),
             "proc_vm_rss_bytes" to procVmRssBytes(),
             "free_storage_bytes" to runCatching { StatFs(appContext.filesDir.absolutePath).availableBytes }.getOrNull(),
+            "cpu_frequencies_khz" to cpuFrequencies(),
             "battery" to batterySnapshot(),
             "thermal" to thermalSnapshot()
         )
     }
+
+    private fun cpuFrequencies(): List<Map<String, Any?>> =
+        (0 until Runtime.getRuntime().availableProcessors()).mapNotNull { cpu ->
+            val base = "/sys/devices/system/cpu/cpu$cpu/cpufreq"
+            val current = readText("$base/scaling_cur_freq")?.toLongOrNull() ?: return@mapNotNull null
+            mapOf(
+                "cpu" to cpu,
+                "current_khz" to current,
+                "min_khz" to readText("$base/cpuinfo_min_freq")?.toLongOrNull(),
+                "max_khz" to readText("$base/cpuinfo_max_freq")?.toLongOrNull(),
+                "governor" to readText("$base/scaling_governor")
+            )
+        }
 
     private fun batterySnapshot(): Map<String, Any?> {
         val intent = runCatching {
@@ -398,7 +408,9 @@ object Diagnostics {
     }
 
     private fun procVmRssBytes(): Long? {
-        val line = runCatching { File("/proc/self/status").useLines { lines -> lines.firstOrNull { it.startsWith("VmRSS:") } } }.getOrNull()
+        val line = runCatching {
+            File("/proc/self/status").useLines { lines -> lines.firstOrNull { it.startsWith("VmRSS:") } }
+        }.getOrNull()
         return line?.trim()?.split(Regex("\\s+"))?.getOrNull(1)?.toLongOrNull()?.times(1024L)
     }
 
@@ -412,6 +424,8 @@ object Diagnostics {
 
     private fun toJsonValue(value: Any?): Any? = when (value) {
         null -> JSONObject.NULL
+        is Double -> if (value.isFinite()) value else JSONObject.NULL
+        is Float -> if (value.isFinite()) value else JSONObject.NULL
         is JSONObject, is JSONArray, is String, is Number, is Boolean -> value
         is Map<*, *> -> {
             val obj = JSONObject()
