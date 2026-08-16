@@ -149,9 +149,45 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="Nhật ký chẩn đoán hiệu năng"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/diagnosticsStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="Nhật ký: đang khởi tạo"
+            android:textSize="13sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="Ghi toàn bộ vòng đời app, tải model, RAM/CPU/nhiệt, tham số tổng hợp, VieNeu native pipeline, benchmark backbone/acoustic/codec, WAV và lỗi. Khi cần phân tích tốc độ hãy xuất ZIP và gửi lại."
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/exportDiagnosticsButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="Xuất nhật ký chẩn đoán ZIP" />
+
+        <Button
+            android:id="@+id/clearDiagnosticsButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="Xóa các phiên nhật ký cũ" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
             android:layout_marginTop="20dp"
             android:paddingBottom="20dp"
-            android:text="Chỉ clone giọng mà bạn có quyền hoặc sự đồng ý để sử dụng. Mọi xử lý giọng mẫu và tổng hợp đều diễn ra trên thiết bị sau khi mô hình đã được tải."
+            android:text="Chỉ clone giọng mà bạn có quyền hoặc sự đồng ý để sử dụng. Mọi xử lý giọng mẫu và tổng hợp đều diễn ra trên thiết bị sau khi mô hình đã được tải. Nhật ký chẩn đoán có thể chứa văn bản đã nhập và tên/đường dẫn tệp cục bộ; chỉ chia sẻ ZIP khi bạn chấp nhận nội dung đó."
             android:textSize="12sp" />
     </LinearLayout>
 </ScrollView>
