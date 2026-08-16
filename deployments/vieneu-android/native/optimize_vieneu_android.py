@@ -1,28 +1,34 @@
 #!/usr/bin/env python3
-"""Android-only performance patches for the pinned VieNeu native source.
+'''Android-only performance patches for the pinned VieNeu native source.
 
 This script runs after diagnostics instrumentation and before add_subdirectory().
 It intentionally fails closed if the pinned upstream source no longer matches.
-"""
+'''
 
 import pathlib
 import sys
 
 if len(sys.argv) != 2:
-    raise SystemExit("usage: optimize_vieneu_android.py <vieneu-source-dir>")
+    raise SystemExit('usage: optimize_vieneu_android.py <vieneu-source-dir>')
 
 root = pathlib.Path(sys.argv[1])
-cpp_path = root / "src/vieneu/v3_native/vieneu_v3_native.cpp"
-header_path = root / "src/vieneu/v3_native/vieneu_v3_native.h"
+cpp_path = root / 'src/vieneu/v3_native/vieneu_v3_native.cpp'
+header_path = root / 'src/vieneu/v3_native/vieneu_v3_native.h'
+assets_cpp_path = root / 'src/vieneu/v3_native/v3_native_assets.cpp'
+acoustic_cpp_path = root / 'src/vieneu/v3_native/v3_native_acoustic_ggml.cpp'
+backbone_cpp_path = root / 'src/vieneu/v3_native/v3_native_backbone_llama.cpp'
 
-cpp = cpp_path.read_text(encoding="utf-8")
-header = header_path.read_text(encoding="utf-8")
+cpp = cpp_path.read_text(encoding='utf-8')
+header = header_path.read_text(encoding='utf-8')
+assets_cpp = assets_cpp_path.read_text(encoding='utf-8')
+acoustic_cpp = acoustic_cpp_path.read_text(encoding='utf-8')
+backbone_cpp = backbone_cpp_path.read_text(encoding='utf-8')
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
     count = text.count(old)
     if count != 1:
-        raise RuntimeError(f"{label}: expected exactly one match, found {count}")
+        raise RuntimeError(f'{label}: expected exactly one match, found {count}')
     return text.replace(old, new, 1)
 
 
@@ -38,8 +44,8 @@ header = replace_once(
 
     // Android hot-path cache. The app frequently synthesizes multiple texts with
     // the same reference WAV. Re-running speaker embedding + MOSS reference
-    // encoding costs ~3.4 s on the profiled SM7675 device, so retain the tiny
-    // derived tensors and invalidate them when file size/mtime or options change.
+    // encoding costs several seconds, so retain the tiny derived tensors and
+    // invalidate them when file size/mtime or options change.
     bool reference_cache_valid_ = false;
     std::string reference_cache_path_;
     long long reference_cache_size_ = -1;
@@ -49,7 +55,7 @@ header = replace_once(
     std::vector<float> reference_cache_speaker_emb_;
     std::vector<int64_t> reference_cache_codes_;
 ''',
-    "reference cache members",
+    'reference cache members',
 )
 
 cpp = replace_once(
@@ -67,7 +73,7 @@ cpp = replace_once(
 
 #include <nlohmann/json.hpp>
 ''',
-    "sys/stat include",
+    'sys/stat include',
 )
 
 cpp = replace_once(
@@ -119,7 +125,7 @@ cpp = replace_once(
 
     V3NativeWaveform wav;
 ''',
-    "reference cache lookup",
+    'reference cache lookup',
 )
 
 cpp = replace_once(
@@ -142,9 +148,85 @@ cpp = replace_once(
     return true;
 }
 ''',
-    "reference cache store",
+    'reference cache store',
 )
 
-header_path.write_text(header, encoding="utf-8")
-cpp_path.write_text(cpp, encoding="utf-8")
-print("Applied Android reference-enrollment cache to pinned VieNeu source")
+assets_cpp = replace_once(
+    assets_cpp,
+    '''        text_emb_ = text->data;
+        audio_emb_ = audio->data;
+        text_emb_t_ = transpose_2d_local(text_emb_, config_.text_vocab_size, config_.hidden_size);
+        audio_emb_t_ = transpose_audio_emb_local(audio_emb_, config_.n_vq, config_.audio_vocab_size, config_.hidden_size);
+''',
+    '''        text_emb_ = text->data;
+        audio_emb_ = audio->data;
+        text_emb_t_.clear();
+        audio_emb_t_.clear();
+''',
+    'skip unused Android transposed head copies',
+)
+
+acoustic_cpp = replace_once(
+    acoustic_cpp,
+    '''        use_ggml_heads = env_flag_enabled("VIENEU_ACOUSTIC_GGML_HEADS", true);
+''',
+    '''        // Android perf build keeps only the original embedding matrices; the
+        // transposed scalar fallback copies are intentionally not allocated.
+        use_ggml_heads = true;
+''',
+    'force GGML heads on Android',
+)
+
+backbone_cpp = replace_once(
+    backbone_cpp,
+    '''    llama_context_params ctx_params = llama_context_default_params();
+    ctx_params.n_ctx = 2048;
+    ctx_params.n_threads = n_threads;
+    ctx_params.n_threads_batch = n_threads_batch;
+    ctx_params.embeddings = true; // Enable embeddings extraction
+    ctx_params.no_perf = true;
+''',
+    '''    llama_context_params ctx_params = llama_context_default_params();
+    ctx_params.n_ctx = 2048;
+    ctx_params.n_batch = 2048;
+    ctx_params.n_ubatch = 128;
+    ctx_params.n_outputs_max = 1;
+    ctx_params.n_threads = n_threads;
+    ctx_params.n_threads_batch = n_threads_batch;
+    ctx_params.embeddings = true; // Enable embeddings extraction
+    ctx_params.no_perf = true;
+
+    if (std::getenv("VIENEU_V3_NATIVE_BENCHMARK")) {
+        std::cout << "[V3NativeDiag] stage=backbone.context"
+                  << " n_ctx=" << ctx_params.n_ctx
+                  << " n_batch=" << ctx_params.n_batch
+                  << " n_ubatch=" << ctx_params.n_ubatch
+                  << " n_outputs_max=" << ctx_params.n_outputs_max << "\\n";
+    }
+''',
+    'right-size llama output and micro-batch buffers',
+)
+
+backbone_cpp = replace_once(
+    backbone_cpp,
+    '''    const int32_t n_tokens = static_cast<int32_t>(embeds.size() / hidden_size_);
+    if (n_tokens <= 0) return false;
+''',
+    '''    const int32_t n_tokens = static_cast<int32_t>(embeds.size() / hidden_size_);
+    if (n_tokens <= 0) return false;
+    if (std::getenv("VIENEU_V3_NATIVE_BENCHMARK")) {
+        std::cout << "[V3NativeDiag] stage=backbone.prefill_meta"
+                  << " tokens=" << n_tokens
+                  << " context_capacity=" << prefill_capacity_ << "\\n";
+    }
+''',
+    'backbone prefill diagnostics',
+)
+
+header_path.write_text(header, encoding='utf-8')
+cpp_path.write_text(cpp, encoding='utf-8')
+assets_cpp_path.write_text(assets_cpp, encoding='utf-8')
+acoustic_cpp_path.write_text(acoustic_cpp, encoding='utf-8')
+backbone_cpp_path.write_text(backbone_cpp, encoding='utf-8')
+
+print('Applied Android reference cache, compact heads, and llama output-buffer tuning')
