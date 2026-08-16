@@ -19,6 +19,7 @@ jobs:
     env:
       NDK_VERSION: 29.0.14206865
       ORT_VERSION: 1.24.3
+      VIENEU_COMMIT: 838979faf0354ffb3dff898e30b709f644fa7db4
 
     steps:
       - name: Checkout
@@ -40,12 +41,23 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build unzip curl git
 
-      - name: Clone VieNeu-TTS.cpp
+      - name: Clone pinned VieNeu-TTS.cpp
         run: |
           mkdir -p .build
-          git clone --depth 1 --recurse-submodules --shallow-submodules \
-            https://github.com/dduongtrandai/VieNeu-TTS.cpp.git .build/vieneu-src
+          git clone --depth 1 https://github.com/dduongtrandai/VieNeu-TTS.cpp.git .build/vieneu-src
+          git -C .build/vieneu-src fetch --depth 1 origin "${VIENEU_COMMIT}"
+          git -C .build/vieneu-src checkout --detach "${VIENEU_COMMIT}"
+          git -C .build/vieneu-src submodule sync --recursive
+          git -C .build/vieneu-src submodule update --init --recursive --depth 1
+          test "$(git -C .build/vieneu-src rev-parse HEAD)" = "${VIENEU_COMMIT}"
           git -C .build/vieneu-src rev-parse HEAD
+          git -C .build/vieneu-src submodule status --recursive
+
+      - name: Instrument VieNeu core diagnostics
+        run: |
+          python3 deployments/vieneu-android/native/instrument_vieneu_diagnostics.py .build/vieneu-src
+          git -C .build/vieneu-src diff --check
+          grep -n 'V3NativeDiag' .build/vieneu-src/src/vieneu/v3_native/vieneu_v3_native.cpp
 
       - name: Prepare ONNX Runtime Android C++ SDK
         run: |
@@ -110,6 +122,7 @@ jobs:
 
           echo "Packaged libraries:"
           ls -lh "$DEST"
+          strings "$DEST/libvieneu-tts.so" | grep 'V3NativeDiag'
           for LIB in "$DEST"/*.so; do
             file "$LIB"
             readelf -d "$LIB" | grep NEEDED || true
