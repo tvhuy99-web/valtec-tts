@@ -20,6 +20,7 @@ jobs:
       NDK_VERSION: 29.0.14206865
       ORT_VERSION: 1.24.3
       VIENEU_COMMIT: 838979faf0354ffb3dff898e30b709f644fa7db4
+      EXPECTED_SIGNING_SHA256: FE:68:B5:9D:82:7C:1E:C0:6D:81:21:61:42:47:6B:12:62:45:56:35:DE:72:5D:5C:0E:47:53:FD:4A:3A:97:1D
 
     steps:
       - name: Checkout
@@ -30,6 +31,40 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+
+      - name: Prepare persistent APK signing
+        env:
+          VIENEU_KEYSTORE_B64: ${{ secrets.VIENEU_SIGNING_KEYSTORE_B64 }}
+          VIENEU_KEYSTORE_PASSWORD: ${{ secrets.VIENEU_SIGNING_PASSWORD }}
+        run: |
+          if [ -z "${VIENEU_KEYSTORE_B64}" ]; then
+            echo "::error::Missing repository secret VIENEU_SIGNING_KEYSTORE_B64. Refusing to create an APK with an ephemeral signature."
+            exit 1
+          fi
+          if [ -z "${VIENEU_KEYSTORE_PASSWORD}" ]; then
+            echo "::error::Missing repository secret VIENEU_SIGNING_PASSWORD. Refusing to create an APK with an ephemeral signature."
+            exit 1
+          fi
+
+          echo "::add-mask::${VIENEU_KEYSTORE_PASSWORD}"
+          KEYSTORE_PATH="${RUNNER_TEMP}/vieneu-update-signing.p12"
+          printf '%s' "${VIENEU_KEYSTORE_B64}" | base64 --decode > "${KEYSTORE_PATH}"
+          chmod 600 "${KEYSTORE_PATH}"
+
+          ACTUAL_FP="$(keytool -list -v \
+            -keystore "${KEYSTORE_PATH}" \
+            -storetype PKCS12 \
+            -storepass "${VIENEU_KEYSTORE_PASSWORD}" \
+            -alias vieneu | sed -n 's/^[[:space:]]*SHA256: //p' | head -n 1)"
+
+          if [ "${ACTUAL_FP}" != "${EXPECTED_SIGNING_SHA256}" ]; then
+            echo "::error::Signing keystore fingerprint mismatch. Expected ${EXPECTED_SIGNING_SHA256}, got ${ACTUAL_FP}."
+            exit 1
+          fi
+
+          echo "VIENEU_SIGNING_KEYSTORE=${KEYSTORE_PATH}" >> "${GITHUB_ENV}"
+          echo "VIENEU_SIGNING_PASSWORD=${VIENEU_KEYSTORE_PASSWORD}" >> "${GITHUB_ENV}"
+          echo "Persistent signing certificate verified: ${ACTUAL_FP}"
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
@@ -128,26 +163,38 @@ jobs:
             readelf -d "$LIB" | grep NEEDED || true
           done
 
-      - name: Build debug APK
+      - name: Build persistently signed debug APK
         run: |
           chmod +x deployments/android/gradlew
           cd deployments/vieneu-android
           ../android/gradlew --no-daemon assembleDebug
 
-      - name: Verify APK
+      - name: Verify APK and signing identity
         run: |
           APK="deployments/vieneu-android/app/build/outputs/apk/debug/app-debug.apk"
+          APKSIGNER="${ANDROID_SDK_ROOT}/build-tools/34.0.0/apksigner"
           test -f "$APK"
+          test -x "$APKSIGNER"
           ls -lh "$APK"
           unzip -l "$APK" | grep 'lib/arm64-v8a/'
           unzip -l "$APK" | grep 'libvieneu_jni.so'
           unzip -l "$APK" | grep 'libomp.so'
           unzip -l "$APK" | grep 'libc++_shared.so'
 
-      - name: Upload APK
+          VERIFY_OUTPUT="$($APKSIGNER verify --verbose --print-certs "$APK")"
+          printf '%s\n' "$VERIFY_OUTPUT"
+          ACTUAL_DIGEST="$(printf '%s\n' "$VERIFY_OUTPUT" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1 | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          EXPECTED_DIGEST="$(printf '%s' "$EXPECTED_SIGNING_SHA256" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          if [ "$ACTUAL_DIGEST" != "$EXPECTED_DIGEST" ]; then
+            echo "::error::Built APK was signed by the wrong certificate. Expected ${EXPECTED_DIGEST}, got ${ACTUAL_DIGEST}."
+            exit 1
+          fi
+          echo "APK signing identity verified: ${EXPECTED_SIGNING_SHA256}"
+
+      - name: Upload stable-signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: vieneu-voice-clone-android-arm64-debug
+          name: vieneu-voice-clone-android-arm64-stable-signed
           path: deployments/vieneu-android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
           if-no-files-found: error
