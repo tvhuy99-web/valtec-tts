@@ -69,6 +69,8 @@ jobs:
             -DANDROID_PLATFORM=android-28 \
             -DANDROID_STL=c++_shared \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
+            -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH \
             -DVIENEU_SOURCE_DIR="${GITHUB_WORKSPACE}/.build/vieneu-src" \
             -DONNXRUNTIME_ROOT="${GITHUB_WORKSPACE}/.build/ort-sdk" \
             -DVIENEU_PORTABLE_CPU=ON \
