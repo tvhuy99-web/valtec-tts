@@ -61,7 +61,7 @@ jobs:
           cp ort-src/include/onnxruntime/core/session/*.h ort-sdk/include/
           test -f ort-sdk/include/onnxruntime_c_api.h
           test -f ort-sdk/include/onnxruntime_cxx_api.h
-          ls -lh ort-sdk/lib/libonnxruntime.so
+          ls -lh ort-sdk/include/onnxruntime_c_api.h ort-sdk/lib/libonnxruntime.so
 
       - name: Configure Android ARM64 native build
         run: |
@@ -71,6 +71,8 @@ jobs:
             -DANDROID_PLATFORM=android-28 \
             -DANDROID_STL=c++_shared \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
+            -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH \
             -DONNXRUNTIME_ROOT="${GITHUB_WORKSPACE}/ort-sdk" \
             -DVIENEU_LLAMA_DIR="${GITHUB_WORKSPACE}/vieneu-src/third_party/llama.cpp" \
             -DVIENEU_PORTABLE_CPU=ON \
