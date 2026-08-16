@@ -5,6 +5,10 @@ if(NOT VIENEU_SOURCE_DIR)
     message(FATAL_ERROR "VIENEU_SOURCE_DIR must point to a VieNeu-TTS.cpp checkout")
 endif()
 
+if(NOT ONNXRUNTIME_ROOT)
+    message(FATAL_ERROR "ONNXRUNTIME_ROOT must point to the Android ONNX Runtime C++ SDK")
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
@@ -19,7 +23,10 @@ set(GGML_LLAMAFILE OFF CACHE BOOL "" FORCE)
 add_subdirectory("${VIENEU_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/vieneu-src-build")
 
 add_library(vieneu_jni SHARED vieneu_jni.cpp)
-target_include_directories(vieneu_jni PRIVATE "${VIENEU_SOURCE_DIR}/src")
+target_include_directories(vieneu_jni PRIVATE
+    "${VIENEU_SOURCE_DIR}/src"
+    "${ONNXRUNTIME_ROOT}/include"
+)
 
 find_library(log-lib log)
 find_library(android-lib android)
