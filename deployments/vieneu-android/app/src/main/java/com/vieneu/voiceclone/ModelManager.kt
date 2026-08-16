@@ -11,6 +11,7 @@ object ModelManager {
     private const val REPO = "lastudio-community/VieNeu-TTS-v3-Turbo-CPP"
     private const val BASE = "https://huggingface.co/$REPO/resolve/main/"
     private const val MIN_FREE_BYTES = 750_000_000L
+    private const val HTTP_RANGE_NOT_SATISFIABLE = 416
 
     val requiredFiles = listOf(
         "config.json",
@@ -78,7 +79,7 @@ object ModelManager {
         var connection = openConnection(URL(BASE + relativePath + "?download=true"), existing)
         var code = connection.responseCode
 
-        if (code == HttpURLConnection.HTTP_REQUESTED_RANGE_NOT_SATISFIABLE) {
+        if (code == HTTP_RANGE_NOT_SATISFIABLE) {
             connection.disconnect()
             part.delete()
             existing = 0L
