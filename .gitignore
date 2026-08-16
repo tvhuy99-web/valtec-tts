@@ -38,6 +38,15 @@ raw_data/
 pretrained/*.pth
 pretrained/*.pt
 
+# Android signing material
+*.jks
+*.keystore
+*.p12
+*.pfx
+signing-password.txt
+secret-values.txt
+VIENEU_SIGNING_KEYSTORE_B64.txt
+
 # IDE
 .vscode/
 .idea/
