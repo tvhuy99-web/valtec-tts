@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-'''Reset VieNeu sampling to upstream seed 42 and log acoustic codebooks.
+'''Reset VieNeu sampling, log acoustic codes and compact the reference prompt.
 
 The upstream sampler starts from mt19937 seed 42. A long-lived Android engine
-otherwise carries RNG state from previous requests, making the same sentence
-produce unrelated lengths. Resetting to 42 preserves fresh-engine behavior.
-Per-frame code logging exposes silence collapse or backend divergence directly.
+otherwise carries RNG state across requests, so each utterance is reset to the
+fresh-engine seed. The full reference remains available to the speaker encoder,
+but only the clearest 3.2-second window is encoded as autoregressive prompt
+codes to reduce linguistic leakage from a long reference recording.
 '''
 
 import pathlib
@@ -62,6 +63,55 @@ int64_t V3NativeSampler::sample_logits(
 
 replace_once(
     engine_cpp,
+    '''        std::vector<float> mono48 = v3_resample_linear(wav.mono, wav.sample_rate, sample_rate());
+        ref_diag_ms("reference.resample_48k", t_ref_stage);
+        const int64_t frames = static_cast<int64_t>(mono48.size());
+''',
+    '''        std::vector<float> mono48 = v3_resample_linear(wav.mono, wav.sample_rate, sample_rate());
+        ref_diag_ms("reference.resample_48k", t_ref_stage);
+
+        // The complete recording still drives the speaker embedding. Restrict
+        // only the autoregressive codec prompt to the strongest 3.2 seconds so
+        // a long reference does not steer the beginning toward its own words.
+        const size_t target_samples = static_cast<size_t>(sample_rate()) * 16u / 5u;
+        size_t selected_start = 0;
+        if (mono48.size() > target_samples && target_samples > 0) {
+            std::vector<double> prefix(mono48.size() + 1, 0.0);
+            for (size_t sample = 0; sample < mono48.size(); ++sample) {
+                const double value = static_cast<double>(mono48[sample]);
+                prefix[sample + 1] = prefix[sample] + value * value;
+            }
+            const size_t hop = (std::max)(static_cast<size_t>(1), static_cast<size_t>(sample_rate() / 20));
+            double best_energy = -1.0;
+            for (size_t start = 0; start + target_samples <= mono48.size(); start += hop) {
+                const double energy = prefix[start + target_samples] - prefix[start];
+                if (energy > best_energy) {
+                    best_energy = energy;
+                    selected_start = start;
+                }
+            }
+            const size_t final_start = mono48.size() - target_samples;
+            const double final_energy = prefix[mono48.size()] - prefix[final_start];
+            if (final_energy > best_energy) selected_start = final_start;
+            std::vector<float> selected(
+                mono48.begin() + static_cast<std::ptrdiff_t>(selected_start),
+                mono48.begin() + static_cast<std::ptrdiff_t>(selected_start + target_samples));
+            mono48.swap(selected);
+        }
+        if (diag) {
+            std::cout << "[V3NativeDiag] stage=reference.codec_window"
+                      << " source_ms=" << (1000.0 * static_cast<double>(wav.mono.size()) / wav.sample_rate)
+                      << " start_ms=" << (1000.0 * static_cast<double>(selected_start) / sample_rate())
+                      << " duration_ms=" << (1000.0 * static_cast<double>(mono48.size()) / sample_rate())
+                      << "\\n";
+        }
+        const int64_t frames = static_cast<int64_t>(mono48.size());
+''',
+    'compact reference codec prompt',
+)
+
+replace_once(
+    engine_cpp,
     '''    std::lock_guard<std::mutex> lock(run_mutex_);
     try {
         std::vector<float> synth_h;
@@ -102,4 +152,4 @@ replace_once(
     'log acoustic codebooks per frame',
 )
 
-print('Applied upstream seed-42 reset and acoustic codebook diagnostics')
+print('Applied seed-42 reset, compact reference prompt and codebook diagnostics')
