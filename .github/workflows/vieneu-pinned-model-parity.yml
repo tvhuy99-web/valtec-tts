@@ -45,7 +45,7 @@ jobs:
           python -m pip install \
             'huggingface_hub[hf_xet]>=0.34' \
             'onnxruntime==1.24.4' \
-            numpy safetensors tokenizers transformers sentencepiece protobuf soundfile
+            onnx numpy safetensors tokenizers transformers sentencepiece protobuf soundfile
 
       - name: Rebuild pinned model and run numerical parity
         id: parity
