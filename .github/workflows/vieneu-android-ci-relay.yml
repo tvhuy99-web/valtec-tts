@@ -11,11 +11,24 @@ on:
 permissions:
   actions: read
   contents: write
+  statuses: write
 
 jobs:
   publish-validated-apk:
     runs-on: ubuntu-latest
     steps:
+      - name: Mark canonical validation pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          gh api --method POST "repos/$REPO/statuses/$HEAD_SHA" \
+            -f state=pending \
+            -f context=vieneu-android-canonical \
+            -f description='Canonical signed APK validation is running'
+
       - name: Wait for the canonical APK workflow
         id: wait
         env:
@@ -100,3 +113,31 @@ jobs:
             --notes "Canonical workflow run: $RUN_ID" \
             relay-artifact/VieNeu-0.9.2-cache-dialect-clear-arm64.apk \
             relay-artifact/VieNeu-0.9.2-cache-dialect-clear-arm64.apk.sha256
+
+      - name: Publish canonical validation status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.sha }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_ID: ${{ steps.wait.outputs.run_id }}
+        shell: bash
+        run: |
+          if [[ "$JOB_STATUS" == success ]]; then
+            state=success
+            description='Canonical signed APK and prerelease artifact passed'
+          else
+            state=failure
+            description='Canonical VieNeu APK validation failed'
+          fi
+          args=(
+            --method POST "repos/$REPO/statuses/$HEAD_SHA"
+            -f "state=$state"
+            -f context=vieneu-android-canonical
+            -f "description=$description"
+          )
+          if [[ -n "${RUN_ID:-}" ]]; then
+            args+=( -f "target_url=https://github.com/$REPO/actions/runs/$RUN_ID" )
+          fi
+          gh api "${args[@]}"
