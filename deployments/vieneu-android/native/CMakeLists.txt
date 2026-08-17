@@ -41,9 +41,9 @@ if(NOT VIENEU_ANDROID_MEMORY_OPT_RESULT EQUAL 0)
 endif()
 message(STATUS "${VIENEU_ANDROID_MEMORY_OPT_STDOUT}")
 
-# Perf4 Q8_0 QKV/O-projection was fast but the submitted short-phrase WAV had a
-# clear hesitation/repetition quality regression. Use FP16 for these internal
-# projections instead. FFN remains Q8_0 and output heads remain F32.
+# Keep the quality-preserving CPU weights while the Vulkan PoC is being brought
+# up. This first gate verifies that the Android APK can package and load the
+# ggml Vulkan backend before acoustic tensors are migrated to the GPU.
 execute_process(
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/optimize_vieneu_android_acoustic_f16.py" "${VIENEU_SOURCE_DIR}"
     RESULT_VARIABLE VIENEU_ANDROID_ACOUSTIC_F16_RESULT
@@ -55,9 +55,6 @@ if(NOT VIENEU_ANDROID_ACOUSTIC_F16_RESULT EQUAL 0)
 endif()
 message(STATUS "${VIENEU_ANDROID_ACOUSTIC_F16_STDOUT}")
 
-# Bound only very short text so an incorrect late EOS cannot turn a sub-second
-# phrase into several seconds of hesitation/repetition. This patches the local
-# Android JNI source before it is compiled; longer text keeps max_new_frames=300.
 execute_process(
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/optimize_vieneu_android_short_text.py" "${CMAKE_CURRENT_LIST_DIR}/vieneu_jni.cpp"
     RESULT_VARIABLE VIENEU_ANDROID_SHORT_TEXT_RESULT
@@ -69,16 +66,20 @@ if(NOT VIENEU_ANDROID_SHORT_TEXT_RESULT EQUAL 0)
 endif()
 message(STATUS "${VIENEU_ANDROID_SHORT_TEXT_STDOUT}")
 
-# Keep a known Android ABI baseline while enabling the ARMv8.2 dot-product and
-# FP16 vector instructions that are available on the profiled SM7675 device.
 set(VIENEU_PORTABLE_CPU ON CACHE BOOL "" FORCE)
 set(GGML_CPU_ARM_ARCH "armv8.2-a+dotprod+fp16" CACHE STRING "" FORCE)
-set(VIENEU_NATIVE_BACKEND cpu CACHE STRING "" FORCE)
+set(VIENEU_NATIVE_BACKEND vulkan CACHE STRING "" FORCE)
+set(GGML_VULKAN ON CACHE BOOL "" FORCE)
+set(GGML_VULKAN_DEBUG OFF CACHE BOOL "" FORCE)
+set(GGML_VULKAN_VALIDATE OFF CACHE BOOL "" FORCE)
+set(GGML_VULKAN_CHECK_RESULTS OFF CACHE BOOL "" FORCE)
+set(GGML_VULKAN_RUN_TESTS OFF CACHE BOOL "" FORCE)
 set(VIENEU_SEA_G2P OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
 set(GGML_LLAMAFILE OFF CACHE BOOL "" FORCE)
 
+message(STATUS "VieNeu Android Vulkan PoC: compiling ggml-vulkan for arm64-v8a")
 add_subdirectory("${VIENEU_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/vieneu-src-build")
 
 add_library(vieneu_jni SHARED vieneu_jni.cpp)
@@ -89,5 +90,9 @@ target_include_directories(vieneu_jni PRIVATE
 
 find_library(log-lib log)
 find_library(android-lib android)
+find_library(vulkan-lib vulkan)
+if(NOT vulkan-lib)
+    message(FATAL_ERROR "Android system Vulkan loader was not found")
+endif()
 
-target_link_libraries(vieneu_jni PRIVATE vieneu-tts ${log-lib} ${android-lib})
+target_link_libraries(vieneu_jni PRIVATE vieneu-tts ${log-lib} ${android-lib} ${vulkan-lib})
