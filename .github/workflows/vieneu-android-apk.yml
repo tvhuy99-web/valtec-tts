@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - agent/vieneu-android-poc
+      - agent/vieneu-android-vulkan-poc
     paths:
       - 'deployments/vieneu-android/**'
       - '.github/signing/vieneu-stable-debug.keystore.b64'
@@ -16,7 +17,7 @@ permissions:
 jobs:
   build-apk:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 120
     env:
       NDK_VERSION: 29.0.14206865
       ORT_VERSION: 1.24.3
@@ -59,12 +60,15 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
-      - name: Install NDK and native build tools
+      - name: Install NDK, Vulkan SDK tools, and native build tools
         run: |
           sdkmanager "ndk;${NDK_VERSION}" "cmake;3.31.6" "platforms;android-34" "build-tools;34.0.0"
           echo "ANDROID_NDK=${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
           sudo apt-get update
-          sudo apt-get install -y ninja-build unzip curl git
+          sudo apt-get install -y ninja-build unzip curl git glslc libvulkan-dev spirv-headers spirv-tools
+          command -v glslc
+          glslc --version
+          test -f /usr/share/cmake/SPIRV-Headers/SPIRV-HeadersConfig.cmake
 
       - name: Clone pinned VieNeu-TTS.cpp
         run: |
@@ -98,8 +102,15 @@ jobs:
           test -f .build/ort-sdk/include/onnxruntime_cxx_api.h
           test -f .build/ort-sdk/lib/libonnxruntime.so
 
-      - name: Configure Android native runtime and JNI
+      - name: Configure Android native runtime and JNI with Vulkan
+        shell: bash
         run: |
+          set -euo pipefail
+          VULKAN_LIB="${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/28/libvulkan.so"
+          VULKAN_INCLUDE="${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include"
+          test -f "$VULKAN_LIB"
+          test -f "$VULKAN_INCLUDE/vulkan/vulkan.h"
+
           cmake -S deployments/vieneu-android/native -B .build/vieneu-android-native -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK}/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
@@ -111,11 +122,15 @@ jobs:
             -DVIENEU_SOURCE_DIR="${GITHUB_WORKSPACE}/.build/vieneu-src" \
             -DONNXRUNTIME_ROOT="${GITHUB_WORKSPACE}/.build/ort-sdk" \
             -DVIENEU_PORTABLE_CPU=ON \
-            -DVIENEU_NATIVE_BACKEND=cpu \
+            -DVIENEU_NATIVE_BACKEND=vulkan \
             -DVIENEU_SEA_G2P=OFF \
             -DBUILD_TESTING=OFF \
             -DGGML_OPENMP=OFF \
-            -DGGML_LLAMAFILE=OFF
+            -DGGML_LLAMAFILE=OFF \
+            -DVulkan_LIBRARY="$VULKAN_LIB" \
+            -DVulkan_INCLUDE_DIR="$VULKAN_INCLUDE" \
+            -DVulkan_GLSLC_EXECUTABLE="$(command -v glslc)" \
+            -DSPIRV-Headers_DIR=/usr/share/cmake/SPIRV-Headers
 
       - name: Build native runtime and JNI
         run: cmake --build .build/vieneu-android-native --target vieneu_jni -j2
@@ -126,7 +141,7 @@ jobs:
           rm -rf "$DEST"
           mkdir -p "$DEST"
 
-          for LIB in libvieneu_jni.so libvieneu-tts.so libllama.so libggml.so libggml-cpu.so libggml-base.so; do
+          for LIB in libvieneu_jni.so libvieneu-tts.so libllama.so libggml.so libggml-cpu.so libggml-base.so libggml-vulkan.so; do
             SRC="$(find .build/vieneu-android-native -type f -name "$LIB" | head -n 1)"
             test -n "$SRC"
             cp "$SRC" "$DEST/$LIB"
@@ -148,6 +163,7 @@ jobs:
           echo "Packaged libraries:"
           ls -lh "$DEST"
           strings "$DEST/libvieneu-tts.so" | grep 'V3NativeDiag'
+          test -s "$DEST/libggml-vulkan.so"
           for LIB in "$DEST"/*.so; do
             file "$LIB"
             readelf -d "$LIB" | grep NEEDED || true
@@ -172,6 +188,7 @@ jobs:
           ls -lh "$APK"
           unzip -l "$APK" | grep 'lib/arm64-v8a/'
           unzip -l "$APK" | grep 'libvieneu_jni.so'
+          unzip -l "$APK" | grep 'libggml-vulkan.so'
           unzip -l "$APK" | grep 'libomp.so'
           unzip -l "$APK" | grep 'libc++_shared.so'
 
@@ -195,7 +212,7 @@ jobs:
       - name: Upload stable-debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: vieneu-voice-clone-android-arm64-stable-debug
+          name: vieneu-voice-clone-android-arm64-vulkan-poc
           path: deployments/vieneu-android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
           if-no-files-found: error
