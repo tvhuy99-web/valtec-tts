@@ -5,14 +5,36 @@ from __future__ import annotations
 
 import argparse
 import csv
+import importlib.util
 import json
-import math
 from pathlib import Path
+import sys
+import types
 
 import numpy as np
 import soundfile as sf
 
 PHONEMES = "zˈaː6w nˈa2j bˈaː6n kˈɔɜ xwˈɛ4 xˌoŋ"
+
+
+def load_engine_class(official_source: Path):
+    """Load onnx_runtime_lite without executing vieneu/__init__.py or torch factory imports."""
+    vieneu_dir = official_source / "src" / "vieneu"
+    engine_dir = vieneu_dir / "_v3_turbo_engine"
+    package = types.ModuleType("vieneu")
+    package.__path__ = [str(vieneu_dir)]
+    sys.modules["vieneu"] = package
+    subpackage = types.ModuleType("vieneu._v3_turbo_engine")
+    subpackage.__path__ = [str(engine_dir)]
+    sys.modules["vieneu._v3_turbo_engine"] = subpackage
+    module_name = "vieneu._v3_turbo_engine.onnx_runtime_lite"
+    spec = importlib.util.spec_from_file_location(module_name, engine_dir / "onnx_runtime_lite.py")
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Unable to load official onnx_runtime_lite.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module.OnnxV3LiteEngine
 
 
 def main() -> None:
@@ -25,10 +47,7 @@ def main() -> None:
     parser.add_argument("--max-frames", type=int, default=80)
     args = parser.parse_args()
 
-    import sys
-    sys.path.insert(0, str(Path(args.official_source) / "src"))
-    from vieneu._v3_turbo_engine.onnx_runtime_lite import OnnxV3LiteEngine
-
+    OnnxV3LiteEngine = load_engine_class(Path(args.official_source))
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     model_dir = Path(args.model_dir)
