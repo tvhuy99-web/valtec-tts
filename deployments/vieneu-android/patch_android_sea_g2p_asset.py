@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-'''Copy the APK-bundled sea-g2p dictionary into VieNeu's writable model dir.'''
+'''Install the bundled sea-g2p dictionary and stamp the fixed Android build.'''
 
 import pathlib
 import sys
@@ -47,4 +47,20 @@ count = text.count(old)
 if count != 1:
     raise RuntimeError(f'ModelManager.modelDir anchor: expected one match, found {count}')
 path.write_text(text.replace(old, new, 1), encoding='utf-8')
-print('Patched Android ModelManager to install bundled sea-g2p dictionary')
+
+# The source tree keeps the last published version. Stamp this corrective build
+# during CI so it installs over v14 without modifying the repository signing file.
+gradle = app / 'build.gradle.kts'
+gradle_text = gradle.read_text(encoding='utf-8')
+version_old = '''        versionCode = 14
+        versionName = "0.6.0-opencl-quality"
+'''
+version_new = '''        versionCode = 15
+        versionName = "0.6.1-opencl-quality-soname-fix"
+'''
+version_count = gradle_text.count(version_old)
+if version_count != 1:
+    raise RuntimeError(f'Android version anchor: expected one match, found {version_count}')
+gradle.write_text(gradle_text.replace(version_old, version_new, 1), encoding='utf-8')
+
+print('Patched Android sea-g2p dictionary install and stamped quality build v15')
