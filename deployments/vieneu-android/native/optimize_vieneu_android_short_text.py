@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate Android voice UI, safe EOS handling and hybrid parity modes."""
+"""Generate Android voice UI, EOS-only retry handling and fast quality modes."""
 
 from pathlib import Path
 import runpy
@@ -22,10 +22,7 @@ def run_script(path: Path, *arguments: str) -> None:
         sys.argv = saved_argv
 
 
-# Expose preset voices and optional WAV cloning.
 run_script(android_root / "patch_android_preset_voices.py", str(android_root))
-
-# Restore upstream generation budgets and reject output that never reaches EOS.
 run_script(native_dir / "optimize_vieneu_android_short_text_base.py", str(jni_path))
 
 text = jni_path.read_text(encoding="utf-8")
@@ -50,31 +47,31 @@ if remaining:
     raise RuntimeError(f"generated JNI still contains stale fragments: {remaining}")
 jni_path.write_text(text, encoding="utf-8")
 
-# Keep stable retry behavior for normal sampling. Deterministic mode added below
-# bypasses the duration heuristic so parity output is never hidden.
 run_script(native_dir / "optimize_vieneu_android_completion_quality.py", str(jni_path))
-
-# Add official consistency-oriented speaker-embedding mode, fidelity mode and a
-# greedy deterministic mode for frame/code comparison.
 run_script(native_dir / "optimize_vieneu_android_parity_mode.py", str(android_root))
 
 text = jni_path.read_text(encoding="utf-8")
 required = (
-    "const int frame_caps[] = {300, 300, 450};",
+    "const int frame_caps[] = {300, 450};",
     "VIENEU_NO_EOS",
-    "stable_request_retry_sequence",
+    "stable_request_no_eos_retry",
+    "rejects_early_eos\\\":false",
     "stop_reason",
     "full_cleaned_reference",
     "params.voice_id",
     "voice_mode",
     "deterministic_mode",
-    "upstream_cpu_f32",
+    "opencl_f32",
     "params.use_ref_codes = use_ref_codes == JNI_TRUE",
 )
 missing = [fragment for fragment in required if fragment not in text]
-if missing:
-    raise RuntimeError(f"generated JNI is missing parity/voice fragments: {missing}")
+forbidden = ("VIENEU_EARLY_EOS", "minimum_audio_ms", "upstream_cpu_f32")
+found = [fragment for fragment in forbidden if fragment in text]
+if missing or found:
+    raise RuntimeError(
+        f"generated JNI fast policy invalid: missing={missing}, forbidden={found}"
+    )
 
 print(
-    "Validated generated JNI: preset voices, stable embedding mode, fidelity mode, deterministic parity and strict no-EOS handling"
+    "Validated generated JNI: preset voices, fast OpenCL F32 modes, immediate EOS acceptance and no-EOS-only retry"
 )
