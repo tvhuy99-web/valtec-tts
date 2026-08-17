@@ -49,7 +49,15 @@ jni_path.write_text(text, encoding="utf-8")
 
 run_script(native_dir / "optimize_vieneu_android_completion_quality.py", str(jni_path))
 run_script(native_dir / "optimize_vieneu_android_parity_mode.py", str(android_root))
-run_script(native_dir / "optimize_vieneu_android_v092_android.py", str(android_root))
+
+v092_android = native_dir / "optimize_vieneu_android_v092_android.py"
+v092_text = v092_android.read_text(encoding="utf-8")
+old_regex = "updated, count = re.subn(pattern, replacement, text, count=1, flags=re.DOTALL)"
+new_regex = "updated, count = re.subn(pattern, lambda _match: replacement, text, count=1, flags=re.DOTALL)"
+if v092_text.count(old_regex) != 1:
+    raise RuntimeError("0.9.2 Android patch regex helper shape changed")
+v092_android.write_text(v092_text.replace(old_regex, new_regex, 1), encoding="utf-8")
+run_script(v092_android, str(android_root))
 
 text = jni_path.read_text(encoding="utf-8")
 required = (
