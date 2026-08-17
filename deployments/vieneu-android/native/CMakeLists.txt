@@ -48,9 +48,8 @@ if(NOT VIENEU_ANDROID_MEMORY_OPT_RESULT EQUAL 0)
 endif()
 message(STATUS "${VIENEU_ANDROID_MEMORY_OPT_STDOUT}")
 
-# Preserve the quality-oriented acoustic configuration while the GPU path is
-# validated. This avoids mixing a backend experiment with another quantization
-# or sampling change.
+# Preserve the quality-oriented acoustic weight formats: QKV/O are FP16, the
+# fused FFN is Q8_0, and final audio/text heads remain F32.
 execute_process(
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/optimize_vieneu_android_acoustic_f16.py" "${VIENEU_SOURCE_DIR}"
     RESULT_VARIABLE VIENEU_ANDROID_ACOUSTIC_F16_RESULT
@@ -61,6 +60,19 @@ if(NOT VIENEU_ANDROID_ACOUSTIC_F16_RESULT EQUAL 0)
     message(FATAL_ERROR "VieNeu Android acoustic FP16 patch failed:\n${VIENEU_ANDROID_ACOUSTIC_F16_STDOUT}\n${VIENEU_ANDROID_ACOUSTIC_F16_STDERR}")
 endif()
 message(STATUS "${VIENEU_ANDROID_ACOUSTIC_F16_STDOUT}")
+
+# The upstream acoustic code accepts a backend but discards it. Replace the
+# projection, fused-FFN and sampling-head graphs with OpenCL-resident buffers.
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/optimize_vieneu_android_acoustic_opencl.py" "${VIENEU_SOURCE_DIR}"
+    RESULT_VARIABLE VIENEU_ANDROID_ACOUSTIC_OPENCL_RESULT
+    OUTPUT_VARIABLE VIENEU_ANDROID_ACOUSTIC_OPENCL_STDOUT
+    ERROR_VARIABLE VIENEU_ANDROID_ACOUSTIC_OPENCL_STDERR
+)
+if(NOT VIENEU_ANDROID_ACOUSTIC_OPENCL_RESULT EQUAL 0)
+    message(FATAL_ERROR "VieNeu Android acoustic OpenCL patch failed:\n${VIENEU_ANDROID_ACOUSTIC_OPENCL_STDOUT}\n${VIENEU_ANDROID_ACOUSTIC_OPENCL_STDERR}")
+endif()
+message(STATUS "${VIENEU_ANDROID_ACOUSTIC_OPENCL_STDOUT}")
 
 execute_process(
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/optimize_vieneu_android_short_text.py" "${CMAKE_CURRENT_LIST_DIR}/vieneu_jni.cpp"
@@ -84,10 +96,23 @@ if(NOT VIENEU_ANDROID_OPENCL_RUNTIME_RESULT EQUAL 0)
 endif()
 message(STATUS "${VIENEU_ANDROID_OPENCL_RUNTIME_STDOUT}")
 
+# Fix the pinned llama.cpp kernel for Qualcomm drivers that expose only the
+# cl_qcom_subgroup_shuffle builtin names.
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/patch_llama_opencl_qcom_shuffle.py" "${VIENEU_SOURCE_DIR}"
+    RESULT_VARIABLE VIENEU_ANDROID_QCOM_SHUFFLE_RESULT
+    OUTPUT_VARIABLE VIENEU_ANDROID_QCOM_SHUFFLE_STDOUT
+    ERROR_VARIABLE VIENEU_ANDROID_QCOM_SHUFFLE_STDERR
+)
+if(NOT VIENEU_ANDROID_QCOM_SHUFFLE_RESULT EQUAL 0)
+    message(FATAL_ERROR "Qualcomm OpenCL shuffle patch failed:\n${VIENEU_ANDROID_QCOM_SHUFFLE_STDOUT}\n${VIENEU_ANDROID_QCOM_SHUFFLE_STDERR}")
+endif()
+message(STATUS "${VIENEU_ANDROID_QCOM_SHUFFLE_STDOUT}")
+
 # VieNeu upstream does not expose 'opencl' as a VIENEU_NATIVE_BACKEND selector.
-# Keep its portable CPU backend compiled for scheduler glue/unsupported tiny ops,
-# while explicitly enabling llama.cpp's OpenCL backend and placing every semantic
-# backbone layer on OpenCL at runtime. There is no whole-backbone CPU fallback.
+# Keep its portable CPU backend compiled only for small scalar/scheduler glue,
+# while all dominant semantic and acoustic matrix graphs use OpenCL. There is
+# no automatic whole-model or acoustic-hot-path CPU fallback.
 set(VIENEU_PORTABLE_CPU ON CACHE BOOL "" FORCE)
 set(GGML_CPU_ARM_ARCH "armv8.2-a+dotprod+fp16" CACHE STRING "" FORCE)
 set(VIENEU_NATIVE_BACKEND cpu CACHE STRING "" FORCE)
@@ -100,7 +125,7 @@ set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
 set(GGML_LLAMAFILE OFF CACHE BOOL "" FORCE)
 
-message(STATUS "VieNeu Android OpenCL PoC: compiling ggml-opencl for arm64-v8a with Adreno kernels")
+message(STATUS "VieNeu Android OpenCL: semantic backbone and acoustic hot paths on Adreno")
 message(STATUS "OpenCL headers: ${OpenCL_INCLUDE_DIR}")
 message(STATUS "OpenCL link library: ${OpenCL_LIBRARY}")
 add_subdirectory("${VIENEU_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/vieneu-src-build")
@@ -109,13 +134,16 @@ if(NOT TARGET ggml-opencl)
     message(FATAL_ERROR "GGML OpenCL target was not created")
 endif()
 
-# The engine patch directly registers the OpenCL backend before loading the
-# llama.cpp backbone, so expose GGML headers and link the backend into VieNeu.
+# Runtime patches directly call the OpenCL backend API before model loading and
+# from the acoustic engine, so expose GGML headers and link ggml-opencl into core.
 target_include_directories(vieneu-tts-core PRIVATE
     "${VIENEU_SOURCE_DIR}/third_party/llama.cpp/ggml/include"
 )
 target_link_libraries(vieneu-tts-core PUBLIC ggml-opencl)
-target_compile_definitions(vieneu-tts-core PRIVATE VIENEU_ANDROID_OPENCL_POC=1)
+target_compile_definitions(vieneu-tts-core PRIVATE
+    VIENEU_ANDROID_OPENCL_POC=1
+    VIENEU_ANDROID_ACOUSTIC_OPENCL=1
+)
 
 add_library(vieneu_jni SHARED vieneu_jni.cpp)
 target_include_directories(vieneu_jni PRIVATE
