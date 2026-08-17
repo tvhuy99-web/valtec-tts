@@ -1,0 +1,163 @@
+name: VieNeu Native Exact F32 Parity
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/vieneu-android-opencl-poc
+    paths:
+      - ".github/workflows/vieneu-native-exact-f32-parity.yml"
+      - "deployments/vieneu-android/parity/**"
+
+permissions:
+  contents: read
+
+env:
+  CPP_COMMIT: 838979faf0354ffb3dff898e30b709f644fa7db4
+  ORT_VERSION: 1.24.4
+  NATIVE_MODEL_REVISION: a7b4f40050d4ff6d5225d8fd4fe6d571913844a2
+  OFFICIAL_MODEL_REVISION: 75ff82a72f54d55ed389e1eeb12041d3c4bac7d4
+  HF_HUB_DISABLE_PROGRESS_BARS: "1"
+  TOKENIZERS_PARALLELISM: "false"
+
+jobs:
+  exact-f32:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout audit scripts
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            "huggingface_hub[hf_xet]>=0.34" \
+            "onnxruntime==${ORT_VERSION}" \
+            numpy tokenizers soundfile
+
+      - name: Clone pinned native and official sources
+        run: |
+          git clone --recursive https://github.com/dduongtrandai/VieNeu-TTS.cpp.git upstream-cpp
+          git -C upstream-cpp checkout "$CPP_COMMIT"
+          git -C upstream-cpp submodule update --init --recursive
+          git clone --depth 1 https://github.com/pnnbao97/VieNeu-TTS.git official-python
+          mkdir -p evidence/native evidence/acoustic-numpy evidence/same-asset models/native/acoustic models/official
+          git -C upstream-cpp rev-parse HEAD | tee evidence/cpp-source-revision.txt
+          git -C official-python rev-parse HEAD | tee evidence/python-source-revision.txt
+
+      - name: Instrument clean native checkpoints
+        run: |
+          python deployments/vieneu-android/parity/patch_native_parity_includes.py upstream-cpp
+          python deployments/vieneu-android/parity/patch_native_parity.py upstream-cpp
+
+      - name: Download exact native package and official ONNX update
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          snapshot_download(
+              repo_id="lastudio-community/VieNeu-TTS-v3-Turbo-CPP",
+              revision="a7b4f40050d4ff6d5225d8fd4fe6d571913844a2",
+              local_dir="models/native",
+          )
+          snapshot_download(
+              repo_id="pnnbao-ump/VieNeu-TTS-v3-Turbo",
+              revision="75ff82a72f54d55ed389e1eeb12041d3c4bac7d4",
+              allow_patterns=["onnx_update/*"],
+              local_dir="models/official",
+          )
+          PY
+          python - <<'PY' >> "$GITHUB_ENV"
+          import json
+          data = json.load(open("models/native/voices_v3_turbo.json", encoding="utf-8"))
+          print("PARITY_VOICE=" + (data.get("default_voice") or next(iter(data["presets"]))))
+          PY
+          sha256sum \
+            models/native/config.json \
+            models/native/backbone.gguf \
+            models/native/vieneu_v3_heads.npz \
+            models/native/acoustic/vieneu_acoustic_weights.npz \
+            | tee evidence/native-model-files.sha256
+
+      - name: Download ONNX Runtime C++ SDK
+        run: |
+          curl --fail --location --retry 5 --retry-delay 3 \
+            -o onnxruntime.tgz \
+            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz"
+          tar -xzf onnxruntime.tgz
+          mv "onnxruntime-linux-x64-${ORT_VERSION}" onnxruntime-sdk
+
+      - name: Build clean native CPU runtime
+        run: |
+          cmake -S upstream-cpp -B native-build -G Ninja \
+            -DONNXRUNTIME_ROOT="$GITHUB_WORKSPACE/onnxruntime-sdk" \
+            -DVIENEU_PORTABLE_CPU=ON \
+            -DVIENEU_NATIVE_BACKEND=cpu \
+            -DVIENEU_SEA_G2P=OFF \
+            -DBUILD_TESTING=OFF \
+            -DGGML_OPENMP=OFF \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build native-build --target vieneu-tts-cli --parallel 2
+
+      - name: Run exact direct-F32 native preset test
+        env:
+          VIENEU_PARITY_PHONEMES: "zˈaː6w nˈa2j bˈaː6n kˈɔɜ xwˈɛ4 xˌoŋ"
+          VIENEU_PARITY_DIR: ${{ github.workspace }}/evidence/native
+          VIENEU_V3_NATIVE_DEBUG_TAGS: "1"
+          VIENEU_V3_NATIVE_BENCHMARK: "1"
+          VIENEU_ACOUSTIC_Q8_FFN: "0"
+          VIENEU_ACOUSTIC_DIRECT_LINEAR: "1"
+          VIENEU_ACOUSTIC_GGML_HEADS: "0"
+          OMP_NUM_THREADS: "2"
+        run: |
+          CLI="$(find native-build -type f -name 'vieneu-tts-cli' -perm -111 | head -n 1)"
+          test -n "$CLI"
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/onnxruntime-sdk/lib:$(dirname "$CLI"):${LD_LIBRARY_PATH:-}"
+          "$CLI" \
+            --profile vieneu-v3-native \
+            --model-dir "$GITHUB_WORKSPACE/models/native" \
+            --codec-dir "$GITHUB_WORKSPACE/models/native/codec" \
+            --voice "$PARITY_VOICE" \
+            --style tu_nhien \
+            --text parity \
+            --temperature 0 \
+            --top-k 0 \
+            --top-p 1 \
+            --max-new-frames 80 \
+            --threads 2 \
+            --output "$GITHUB_WORKSPACE/evidence/native/native.wav" \
+            2>&1 | tee evidence/native/native-run.log
+
+      - name: Compare native acoustic against same-weight NumPy oracle
+        run: |
+          python deployments/vieneu-android/parity/run_native_acoustic_numpy_parity.py \
+            --native-model-dir models/native \
+            --native-dump-dir evidence/native \
+            --output evidence/acoustic-numpy/report.json \
+            2>&1 | tee evidence/acoustic-numpy/run.log
+
+      - name: Compare exact native runtime with official ONNX using identical native heads
+        run: |
+          python deployments/vieneu-android/parity/run_same_asset_parity.py \
+            --official-source official-python \
+            --onnx-dir models/official/onnx_update \
+            --native-model-dir models/native \
+            --native-dump-dir evidence/native \
+            --output-dir evidence/same-asset \
+            2>&1 | tee evidence/same-asset/run.log
+
+      - name: Upload exact F32 parity evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: vieneu-native-exact-f32-parity
+          path: evidence
+          if-no-files-found: error
+          retention-days: 30
