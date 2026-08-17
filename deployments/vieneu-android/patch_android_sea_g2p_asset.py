@@ -53,12 +53,12 @@ gradle_text = gradle.read_text(encoding='utf-8')
 version_old = '''        versionCode = 14
         versionName = "0.6.0-opencl-quality"
 '''
-version_new = '''        versionCode = 16
-        versionName = "0.7.0-opencl-upstream-quality"
+version_new = '''        versionCode = 17
+        versionName = "0.8.0-opencl-f32-reference-window"
 '''
 version_count = gradle_text.count(version_old)
 if version_count != 1:
     raise RuntimeError(f'Android version anchor: expected one match, found {version_count}')
 gradle.write_text(gradle_text.replace(version_old, version_new, 1), encoding='utf-8')
 
-print('Patched Android sea-g2p dictionary install and stamped upstream-quality build v16')
+print('Patched Android sea-g2p dictionary install and stamped full-F32 quality build v17')
