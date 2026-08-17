@@ -8,6 +8,13 @@
         android:supportsRtl="true"
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="false">
+        <!-- Qualcomm exposes OpenCL as a vendor native library on supported devices.
+             required=false keeps the APK installable for diagnostics; native loading
+             still fails fast and never falls back to whole-backbone CPU inference. -->
+        <uses-native-library
+            android:name="libOpenCL.so"
+            android:required="false" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
