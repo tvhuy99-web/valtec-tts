@@ -22,12 +22,12 @@ if count != 1:
     raise RuntimeError(f"parity includes: expected one match, found {count}")
 path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
-subprocess.run(
-    [
-        sys.executable,
-        str(pathlib.Path(__file__).with_name("patch_native_acoustic_internal_dump.py")),
-        str(root),
-    ],
-    check=True,
-)
-print("Added parity diagnostic C++ includes and acoustic hidden-state dumps")
+for script_name in (
+    "patch_native_acoustic_internal_dump.py",
+    "patch_native_acoustic_trace_once.py",
+):
+    subprocess.run(
+        [sys.executable, str(pathlib.Path(__file__).with_name(script_name)), str(root)],
+        check=True,
+    )
+print("Added parity diagnostics and preserved the first acoustic frame trace")
