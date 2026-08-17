@@ -115,12 +115,12 @@ cpp = replace_once(
         if (diag) {
             std::cout << "[V3NativeDiag] stage=reference.cache_hit wall_ms=0"
                       << " speaker_values=" << speaker_emb.size()
-                      << " code_values=" << ref_codes.size() << "\\n";
+                      << " code_values=" << ref_codes.size() << "\n";
         }
         return true;
     }
     if (diag) {
-        std::cout << "[V3NativeDiag] stage=reference.cache_miss wall_ms=0\\n";
+        std::cout << "[V3NativeDiag] stage=reference.cache_miss wall_ms=0\n";
     }
 
     V3NativeWaveform wav;
@@ -188,9 +188,11 @@ backbone_cpp = replace_once(
 ''',
     '''    llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = 2048;
-    ctx_params.n_batch = 2048;
+    // llama.cpp emits every token embedding while embeddings=true. Keep batches
+    // bounded so the output/logit buffers never scale to the full 2048 context.
+    ctx_params.n_batch = 128;
     ctx_params.n_ubatch = 128;
-    ctx_params.n_outputs_max = 1;
+    ctx_params.n_outputs_max = 128;
     ctx_params.n_threads = n_threads;
     ctx_params.n_threads_batch = n_threads_batch;
     ctx_params.embeddings = true; // Enable embeddings extraction
@@ -201,10 +203,10 @@ backbone_cpp = replace_once(
                   << " n_ctx=" << ctx_params.n_ctx
                   << " n_batch=" << ctx_params.n_batch
                   << " n_ubatch=" << ctx_params.n_ubatch
-                  << " n_outputs_max=" << ctx_params.n_outputs_max << "\\n";
+                  << " n_outputs_max=" << ctx_params.n_outputs_max << "\n";
     }
 ''',
-    'right-size llama output and micro-batch buffers',
+    'bounded llama output and batch buffers',
 )
 
 backbone_cpp = replace_once(
@@ -217,10 +219,82 @@ backbone_cpp = replace_once(
     if (std::getenv("VIENEU_V3_NATIVE_BENCHMARK")) {
         std::cout << "[V3NativeDiag] stage=backbone.prefill_meta"
                   << " tokens=" << n_tokens
-                  << " context_capacity=" << prefill_capacity_ << "\\n";
+                  << " context_capacity=" << prefill_capacity_
+                  << " chunk_tokens=128\n";
     }
 ''',
     'backbone prefill diagnostics',
+)
+
+backbone_cpp = replace_once(
+    backbone_cpp,
+    '''    // Reset KV cache and decoded position
+    clear_kv_cache();
+
+    // Copy input embeddings
+    std::memcpy(prefill_batch_.embd, embeds.data(), embeds.size() * sizeof(float));
+
+    for (int32_t i = 0; i < n_tokens; ++i) {
+        prefill_batch_.pos[i] = i;
+        prefill_batch_.n_seq_id[i] = 1;
+        prefill_batch_.seq_id[i][0] = 0;
+        prefill_batch_.logits[i] = (i == n_tokens - 1); // request logits/embedding output for last token only
+    }
+    prefill_batch_.n_tokens = n_tokens;
+
+    int res = llama_decode(ctx_, prefill_batch_);
+
+    if (res != 0) {
+        std::cerr << "[V3NativeBackbone] Prefill failed with code: " << res << std::endl;
+        return false;
+    }
+
+    decoded_pos_ = n_tokens;
+''',
+    '''    // Reset KV cache once, then feed the prompt in bounded blocks. llama.cpp
+    // currently treats embeddings=true as output-all, so a single large prefill
+    // would require one output row per prompt token. Chunking keeps the maximum
+    // output allocation at 128 rows while preserving the same causal KV sequence.
+    clear_kv_cache();
+
+    constexpr int32_t kPrefillChunkTokens = 128;
+    const bool diag = std::getenv("VIENEU_V3_NATIVE_BENCHMARK") != nullptr;
+    for (int32_t chunk_start = 0; chunk_start < n_tokens; chunk_start += kPrefillChunkTokens) {
+        const int32_t chunk_tokens = (std::min)(kPrefillChunkTokens, n_tokens - chunk_start);
+        const size_t chunk_values = static_cast<size_t>(chunk_tokens) * static_cast<size_t>(hidden_size_);
+        const size_t src_offset = static_cast<size_t>(chunk_start) * static_cast<size_t>(hidden_size_);
+
+        std::memcpy(
+            prefill_batch_.embd,
+            embeds.data() + src_offset,
+            chunk_values * sizeof(float));
+
+        for (int32_t i = 0; i < chunk_tokens; ++i) {
+            prefill_batch_.pos[i] = chunk_start + i;
+            prefill_batch_.n_seq_id[i] = 1;
+            prefill_batch_.seq_id[i][0] = 0;
+            prefill_batch_.logits[i] = (i == chunk_tokens - 1);
+        }
+        prefill_batch_.n_tokens = chunk_tokens;
+
+        if (diag) {
+            std::cout << "[V3NativeDiag] stage=backbone.prefill_chunk"
+                      << " start=" << chunk_start
+                      << " tokens=" << chunk_tokens << "\n";
+        }
+
+        const int res = llama_decode(ctx_, prefill_batch_);
+        if (res != 0) {
+            std::cerr << "[V3NativeBackbone] Prefill chunk failed with code: " << res
+                      << " start=" << chunk_start
+                      << " tokens=" << chunk_tokens << std::endl;
+            return false;
+        }
+
+        decoded_pos_ = chunk_start + chunk_tokens;
+    }
+''',
+    'chunk Android prefill to bounded output allocation',
 )
 
 header_path.write_text(header, encoding='utf-8')
@@ -229,4 +303,4 @@ assets_cpp_path.write_text(assets_cpp, encoding='utf-8')
 acoustic_cpp_path.write_text(acoustic_cpp, encoding='utf-8')
 backbone_cpp_path.write_text(backbone_cpp, encoding='utf-8')
 
-print('Applied Android reference cache, compact heads, and llama output-buffer tuning')
+print('Applied Android reference cache, compact heads, and chunked llama prefill')
