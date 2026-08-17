@@ -16,6 +16,18 @@ if(NOT EXISTS "${VULKAN_HEADERS_ROOT}/include/vulkan/vulkan.hpp")
     message(FATAL_ERROR "Pinned Vulkan-Hpp header is missing: ${VULKAN_HEADERS_ROOT}/include/vulkan/vulkan.hpp")
 endif()
 
+# ggml-vulkan's cross-compiled runtime also consumes the C++ SPIR-V definitions.
+# Ubuntu installs them as host headers, but the Android toolchain deliberately
+# excludes host include roots. Copy only the versioned SPIR-V subtree into a
+# private build include root rather than exposing all of /usr/include.
+set(VIENEU_HOST_SPIRV_HEADER "/usr/include/spirv/unified1/spirv.hpp")
+if(NOT EXISTS "${VIENEU_HOST_SPIRV_HEADER}")
+    message(FATAL_ERROR "SPIR-V C++ header is missing: ${VIENEU_HOST_SPIRV_HEADER}")
+endif()
+set(VIENEU_SPIRV_INCLUDE_ROOT "${CMAKE_BINARY_DIR}/host-spirv-include")
+file(MAKE_DIRECTORY "${VIENEU_SPIRV_INCLUDE_ROOT}")
+file(COPY "/usr/include/spirv" DESTINATION "${VIENEU_SPIRV_INCLUDE_ROOT}")
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
@@ -103,8 +115,12 @@ add_subdirectory("${VIENEU_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/vieneu-src-build")
 if(NOT TARGET ggml-vulkan)
     message(FATAL_ERROR "GGML Vulkan target was not created")
 endif()
-target_include_directories(ggml-vulkan PRIVATE "${VULKAN_HEADERS_ROOT}/include")
+target_include_directories(ggml-vulkan PRIVATE
+    "${VULKAN_HEADERS_ROOT}/include"
+    "${VIENEU_SPIRV_INCLUDE_ROOT}"
+)
 message(STATUS "Using pinned Vulkan-Hpp headers: ${VULKAN_HEADERS_ROOT}/include")
+message(STATUS "Using staged SPIR-V headers: ${VIENEU_SPIRV_INCLUDE_ROOT}")
 
 # The engine patch directly calls the Vulkan registry/probe API before loading
 # llama.cpp. Link and expose the pinned GGML headers explicitly instead of
