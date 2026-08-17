@@ -6,6 +6,15 @@ import json
 from pathlib import Path
 
 
+def resolve_report(path: Path, alternate_name: str) -> Path:
+    if path.is_file():
+        return path
+    alternate = path.parent / alternate_name
+    if alternate.is_file():
+        return alternate
+    raise FileNotFoundError(f"parity report not found: {path} or {alternate}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--same-asset-report", required=True, type=Path)
@@ -15,8 +24,10 @@ def main() -> int:
     parser.add_argument("--max-backbone-max-abs", type=float, default=1.0e-3)
     args = parser.parse_args()
 
-    same = json.loads(args.same_asset_report.read_text(encoding="utf-8"))
-    acoustic = json.loads(args.acoustic_report.read_text(encoding="utf-8"))
+    same_path = resolve_report(args.same_asset_report, "same-asset-report.json")
+    acoustic_path = resolve_report(args.acoustic_report, "report.json")
+    same = json.loads(same_path.read_text(encoding="utf-8"))
+    acoustic = json.loads(acoustic_path.read_text(encoding="utf-8"))
 
     hidden = same["same_prompt_backbone_hidden"]
     frame_exact = bool(same.get("frame0_codes_exact"))
@@ -32,6 +43,10 @@ def main() -> int:
     summary = {
         "schema": 1,
         "pass": all(checks.values()),
+        "inputs": {
+            "same_asset_report": str(same_path),
+            "acoustic_report": str(acoustic_path),
+        },
         "checks": checks,
         "thresholds": {
             "min_backbone_cosine": args.min_backbone_cosine,
