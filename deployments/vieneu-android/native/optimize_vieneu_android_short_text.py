@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-'''Apply Android quality/speed policy to every utterance.
+'''Apply bounded Android generation while preserving VieNeu v3 quality defaults.
 
-The old <=5-word rule created a cliff: a two-word phrase was capped, while a
-six-word phrase could wander to 300 frames. This patch estimates a conservative
-frame budget for all text, uses lower-variance sampling, relies on the speaker
-embedding instead of copying reference codec content, and fades forced endings.
+The adaptive frame budget prevents runaway generation, but voice cloning and
+sampling remain aligned with the original v3 Turbo implementation: reference
+codec conditioning enabled, temperature 0.8, top-k 25, top-p 0.95 and
+repetition penalty 1.2. These settings are quality-critical for the 16-codebook
+acoustic sampler and should not be replaced by low-temperature greedy sampling.
 '''
 
 import pathlib
@@ -54,17 +55,15 @@ int whitespace_word_count(const std::string& value) {
 int adaptive_text_frame_cap(const std::string& value) {
     const int codepoints = utf8_codepoint_count(value);
     const int words = whitespace_word_count(value);
-    if (codepoints <= 0 || words <= 0) return 14;
+    if (codepoints <= 0 || words <= 0) return 18;
 
-    // One MOSS frame is about 80 ms. Vietnamese text usually needs roughly
-    // 3-4 frames per whitespace word. Add six frames for onset and EOS, and
-    // cross-check against character count for long compounds. This gives:
-    //   "Xin chào"                     -> 14 frames (~1.12 s)
-    //   "Dạo này bạn có khỏe không"    -> 30 frames (~2.40 s)
-    // while preventing a short sentence from wandering to 191/300 frames.
-    const int by_words = words * 4 + 6;
-    const int by_chars = (codepoints * 7 + 9) / 10 + 6;
-    return std::clamp((std::max)(by_words, by_chars), 14, 160);
+    // A MOSS frame is about 80 ms. Keep enough room for natural onset, pauses
+    // and EOS while preventing a short request from wandering to 191/300
+    // frames. "Xin chào" gets 18 frames (~1.44 s) and the six-word quality
+    // test gets 38 frames (~3.04 s).
+    const int by_words = words * 5 + 8;
+    const int by_chars = (codepoints * 8 + 9) / 10 + 8;
+    return std::clamp((std::max)(by_words, by_chars), 18, 180);
 }
 
 void apply_tail_fade(std::vector<float>& audio, int sample_rate) {
@@ -124,23 +123,24 @@ replace_once(
         std::ostringstream start_data;
 ''',
     '''        params.denoise_ref = true;
-        // Speaker embedding retains identity without feeding reference speech
-        // codec tokens back into the prompt. This removes reference-content
-        // leakage and avoids the expensive reference codec encode on first use.
-        params.use_ref_codes = false;
+        // Keep reference acoustic codes. The v3 Turbo zero-shot path was
+        // trained to condition on both the speaker embedding and reference
+        // codec prompt; speaker embedding alone collapsed into silence on the
+        // submitted six-word sample.
+        params.use_ref_codes = true;
         params.apply_watermark = true;
         params.max_chars = 120;
-        params.temperature = 0.45f;
-        params.top_k = 10;
-        params.top_p = 0.90f;
-        params.repetition_penalty = 1.05f;
+        params.temperature = 0.8f;
+        params.top_k = 25;
+        params.top_p = 0.95f;
+        params.repetition_penalty = 1.2f;
         const int auto_frame_cap = adaptive_text_frame_cap(params.text);
         params.max_new_frames = (std::min)(params.max_new_frames, auto_frame_cap);
         params.progress = [](const VieneuProgressEvent& event) { log_progress(event); };
 
         std::ostringstream start_data;
 ''',
-    'apply stable sampling and adaptive frame cap',
+    'restore upstream sampling and reference conditioning',
 )
 
 replace_once(
@@ -152,7 +152,7 @@ replace_once(
                    << ",\\\"text_codepoints\\\":" << utf8_codepoint_count(params.text)
                    << ",\\\"text_words\\\":" << whitespace_word_count(params.text)
                    << ",\\\"tail_fade_ms\\\":20"
-                   << ",\\\"sampling_profile\\\":\\\"stable_quality\\\""
+                   << ",\\\"sampling_profile\\\":\\\"upstream_quality\\\""
                    << ",\\\"repetition_penalty\\\":" << params.repetition_penalty
 ''',
     'quality diagnostics fields',
@@ -164,7 +164,7 @@ replace_once(
                    << ",\\\"apply_watermark\\\":true}";
 ''',
     '''                   << ",\\\"denoise_ref\\\":true"
-                   << ",\\\"use_ref_codes\\\":false"
+                   << ",\\\"use_ref_codes\\\":true"
                    << ",\\\"apply_watermark\\\":true}";
 ''',
     'reference-code diagnostics',
@@ -180,4 +180,4 @@ replace_once(
 )
 
 path.write_text(text, encoding='utf-8')
-print('Applied deterministic quality sampling, adaptive frame cap and reference-code isolation')
+print('Applied upstream-quality sampling, reference-code conditioning and bounded frames')
