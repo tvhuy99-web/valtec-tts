@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Expose stable/reference/deterministic modes after Android JNI generation patches.
+"""Expose stable/reference/deterministic modes on the fast OpenCL runtime.
 
-The default mode uses only the 192-dimensional speaker embedding. This matches
-the official VieNeu API's consistency-oriented path and avoids feeding a long
-reference-code prompt into short target sentences. A fidelity mode remains
-available, and a deterministic greedy mode is included for tensor/code parity
-investigation.
+The default mode uses only the 192-dimensional speaker embedding for consistency.
+A fidelity mode keeps reference codes, and a deterministic greedy mode remains
+available for reproducible frame/code diagnostics. Acoustic and semantic matrix
+hot paths run on OpenCL with original F32 acoustic weights.
 """
 
 from pathlib import Path
@@ -30,7 +29,6 @@ def replace_once(path: Path, old: str, new: str, label: str) -> None:
     path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
 
-# Kotlin/JNI API: carry consistency mode and deterministic parity mode explicitly.
 replace_once(
     native_kt,
     "external fun synthesize(text: String, referenceWav: String, voiceId: String, style: String): FloatArray?",
@@ -52,7 +50,7 @@ replace_once(
 replace_once(
     jni,
     "        params.repetition_penalty = 1.2f;\n        // Keep the native upstream safety budget.",
-    "        params.repetition_penalty = 1.2f;\n        if (deterministic_mode) {\n            // Greedy generation is the only useful mode for parity comparison:\n            // the same prompt must produce exactly the same 16 codes per frame.\n            params.temperature = 0.0f;\n            params.top_k = 1;\n            params.top_p = 1.0f;\n            params.repetition_penalty = 1.0f;\n        }\n        // Keep the native upstream safety budget.",
+    "        params.repetition_penalty = 1.2f;\n        if (deterministic_mode) {\n            params.temperature = 0.0f;\n            params.top_k = 1;\n            params.top_p = 1.0f;\n            params.repetition_penalty = 1.0f;\n        }\n        // Keep the native upstream safety budget.",
     "configure deterministic sampling",
 )
 replace_once(
@@ -63,19 +61,12 @@ replace_once(
     '''                   << ",\\\"denoise_ref\\\":true"
                    << ",\\\"use_ref_codes\\\":" << (params.use_ref_codes ? "true" : "false")
                    << ",\\\"deterministic_mode\\\":" << (deterministic_mode ? "true" : "false")
-                   << ",\\\"acoustic_backend\\\":\\\"upstream_cpu_f32\\\""
+                   << ",\\\"acoustic_backend\\\":\\\"opencl_f32\\\""
                    << ",\\\"semantic_backend\\\":\\\"opencl\\\""
                    << ",\\\"apply_watermark\\\":true}";''',
-    "log parity mode",
-)
-replace_once(
-    jni,
-    "                if (candidate_audio_ms + 0.5 < minimum_audio_ms) {",
-    "                if (!deterministic_mode && candidate_audio_ms + 0.5 < minimum_audio_ms) {",
-    "do not hide deterministic parity output behind duration heuristic",
+    "log fast quality mode",
 )
 
-# UI: add an explicit quality/parity selector.
 replace_once(
     activity,
     "    private lateinit var voiceInfo: TextView\n    private lateinit var styleSpinner: Spinner",
@@ -169,7 +160,7 @@ replace_once(
 replace_once(
     activity,
     '                "voice_mode" to voiceMode,\n                "engine_already_ready" to engineReady,',
-    '                "voice_mode" to voiceMode,\n                "generation_profile" to generationProfile,\n                "use_ref_codes" to useRefCodes,\n                "deterministic" to deterministic,\n                "acoustic_backend" to "upstream_cpu_f32",\n                "engine_already_ready" to engineReady,',
+    '                "voice_mode" to voiceMode,\n                "generation_profile" to generationProfile,\n                "use_ref_codes" to useRefCodes,\n                "deterministic" to deterministic,\n                "acoustic_backend" to "opencl_f32",\n                "engine_already_ready" to engineReady,',
     "log generation profile",
 )
 replace_once(
@@ -182,7 +173,7 @@ replace_once(
     activity,
     "VieNeuNative.synthesize(text, referencePath, voiceId, style)",
     "VieNeuNative.synthesize(text, referencePath, voiceId, style, useRefCodes, deterministic)",
-    "pass parity mode to JNI",
+    "pass quality mode to JNI",
 )
 
 replace_once(
@@ -218,7 +209,7 @@ replace_once(
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="5dp"
-            android:text="Ổn định chỉ dùng dấu giọng speaker embedding. Bám sát mẫu thêm mã âm thanh tham chiếu. Deterministic dùng greedy để đối chiếu từng codebook."
+            android:text="Ổn định chỉ dùng dấu giọng speaker embedding. Bám sát mẫu thêm mã âm thanh tham chiếu. Deterministic dùng greedy để tạo kết quả lặp lại."
             android:textSize="12sp" />
 
         <Button
@@ -228,27 +219,27 @@ replace_once(
 replace_once(
     layout,
     'android:text="Dùng giọng có sẵn hoặc clone giọng tiếng Việt offline bằng VieNeu-TTS v3 Turbo"',
-    'android:text="Bản parity: semantic OpenCL, acoustic CPU F32 chuẩn; dùng giọng có sẵn hoặc clone offline"',
-    "describe hybrid parity runtime",
+    'android:text="Bản nhanh: semantic và acoustic OpenCL F32; dùng giọng có sẵn hoặc clone offline"',
+    "describe fast runtime",
 )
 replace_once(
     gradle,
     'versionCode = 16\n        versionName = "0.8.0-preset-voices-early-eos"',
-    'versionCode = 17\n        versionName = "0.9.0-parity-cpu-acoustic"',
-    "bump Android parity version",
+    'versionCode = 18\n        versionName = "0.9.1-fast-opencl-eos"',
+    "bump Android fast-fix version",
 )
 
 checks = {
-    activity: ("generationModeSpinner", "speaker_embedding_stable", "normalizeTextForTts", "useRefCodes, deterministic"),
+    activity: ("generationModeSpinner", "speaker_embedding_stable", "normalizeTextForTts", "useRefCodes, deterministic", "opencl_f32"),
     native_kt: ("useRefCodes: Boolean", "deterministic: Boolean"),
-    layout: ("@+id/generationModeSpinner", "acoustic CPU F32"),
-    jni: ("deterministic_mode", "upstream_cpu_f32", "params.use_ref_codes = use_ref_codes == JNI_TRUE"),
-    gradle: ("0.9.0-parity-cpu-acoustic", "versionCode = 17"),
+    layout: ("@+id/generationModeSpinner", "acoustic OpenCL F32"),
+    jni: ("deterministic_mode", "opencl_f32", "params.use_ref_codes = use_ref_codes == JNI_TRUE"),
+    gradle: ("0.9.1-fast-opencl-eos", "versionCode = 18"),
 }
 for path, fragments in checks.items():
     text = path.read_text(encoding="utf-8")
     missing = [fragment for fragment in fragments if fragment not in text]
     if missing:
-        raise RuntimeError(f"{path}: missing parity fragments {missing}")
+        raise RuntimeError(f"{path}: missing fast quality fragments {missing}")
 
-print("Enabled speaker-embedding stability mode, reference-code fidelity mode and deterministic parity mode")
+print("Enabled fast OpenCL F32 runtime with stable, reference-code and deterministic modes")
