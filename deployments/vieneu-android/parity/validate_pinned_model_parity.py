@@ -40,6 +40,40 @@ def run_acoustic_weight_audit(summary_path: Path) -> Path | None:
     return output
 
 
+def run_acoustic_state_audit(summary_path: Path) -> Path | None:
+    required = [
+        Path("official-python"),
+        Path("models/official/onnx_update"),
+        Path("models/pinned"),
+        Path("evidence/native/native_prefill_h.f32"),
+        Path("evidence/acoustic-numpy/numpy_acoustic_initial.f32"),
+    ]
+    script = Path(__file__).with_name("run_acoustic_onnx_state_parity.py")
+    if not all(path.exists() for path in required) or not script.is_file():
+        return None
+    output = summary_path.parent / "acoustic-onnx-state-parity.json"
+    subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--official-source",
+            "official-python",
+            "--onnx-dir",
+            "models/official/onnx_update",
+            "--native-model-dir",
+            "models/pinned",
+            "--native-dump-dir",
+            "evidence/native",
+            "--numpy-dump-dir",
+            "evidence/acoustic-numpy",
+            "--output",
+            str(output),
+        ],
+        check=True,
+    )
+    return output
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--same-asset-report", required=True, type=Path)
@@ -51,6 +85,7 @@ def main() -> int:
 
     args.summary.parent.mkdir(parents=True, exist_ok=True)
     audit_path = run_acoustic_weight_audit(args.summary)
+    state_path = run_acoustic_state_audit(args.summary)
     same_path = resolve_report(args.same_asset_report, "same-asset-report.json")
     acoustic_path = resolve_report(args.acoustic_report, "report.json")
     same = json.loads(same_path.read_text(encoding="utf-8"))
@@ -74,6 +109,7 @@ def main() -> int:
             "same_asset_report": str(same_path),
             "acoustic_report": str(acoustic_path),
             "acoustic_onnx_weight_audit": str(audit_path) if audit_path else None,
+            "acoustic_onnx_state_parity": str(state_path) if state_path else None,
         },
         "checks": checks,
         "thresholds": {
