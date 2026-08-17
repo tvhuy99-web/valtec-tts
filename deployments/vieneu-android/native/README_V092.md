@@ -9,3 +9,5 @@ This branch adds only the following user-facing behavior on top of the validated
 - Clear Speech adds punctuation pauses without changing model weights or acoustic sampling for the two normal modes.
 
 The OpenCL F32 acoustic path and immediate real-EOS acceptance remain unchanged.
+
+Validation is performed by the canonical `vieneu-android-apk.yml` workflow; the temporary relay publishes the exact signed artifact for binary inspection and is removed before merge.
