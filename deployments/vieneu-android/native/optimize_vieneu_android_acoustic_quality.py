@@ -1,31 +1,47 @@
 #!/usr/bin/env python3
-"""Force the upstream CPU acoustic decoder to use full F32 weights.
+'''Use full-F32 weights for every VieNeu acoustic hot-path graph on OpenCL.
 
-Upstream runs acoustic attention and projections on CPU, but its fused FFN still
-enables Q8_0 by default. For a behavioral parity build, that quantization must
-also be disabled because autoregressive numerical drift compounds frame by
-frame. This patch changes only the upstream CPU implementation: no custom graph
-or backend is introduced.
-"""
+FP16 made the Android implementation fast, but the submitted v16 waveform still
+mispronounced the beginning of a six-word Vietnamese sentence. This diagnostic
+quality build keeps QKV, O-projection, FFN and output heads on the Adreno OpenCL
+backend while retaining the original F32 model weights. No CPU fallback is
+introduced. The result establishes whether FP16 numerical drift is responsible
+for the remaining pronunciation errors.
+'''
 
-from pathlib import Path
+import pathlib
 import sys
 
 if len(sys.argv) != 2:
-    raise SystemExit("usage: optimize_vieneu_android_acoustic_quality.py <vieneu-source-dir>")
+    raise SystemExit('usage: optimize_vieneu_android_acoustic_quality.py <vieneu-source-dir>')
 
-path = Path(sys.argv[1]) / "src/vieneu/v3_native/v3_native_acoustic_ggml.cpp"
-text = path.read_text(encoding="utf-8")
+root = pathlib.Path(sys.argv[1])
+path = root / 'src/vieneu/v3_native/v3_native_acoustic_ggml.cpp'
+text = path.read_text(encoding='utf-8')
 
 
 def replace_once(old: str, new: str, label: str) -> None:
     global text
     count = text.count(old)
     if count != 1:
-        raise RuntimeError(f"{label}: expected exactly one match, found {count}")
+        raise RuntimeError(f'{label}: expected exactly one match, found {count}')
     text = text.replace(old, new, 1)
 
 
+# The earlier Android patch passes allow_f16=true for QKV and O-projection.
+# Preserve that call ABI but force the OpenCL tensor type back to F32.
+replace_once(
+    '''        use_f16_ = allow_f16;
+        const ggml_type weight_type = use_f16_ ? GGML_TYPE_F16 : GGML_TYPE_F32;
+''',
+    '''        (void)allow_f16;
+        use_f16_ = false;
+        const ggml_type weight_type = GGML_TYPE_F32;
+''',
+    'force F32 acoustic linear weights',
+)
+
+# Disable FFN quantization/conversion and upload the original F32 arrays.
 replace_once(
     '''        use_q8_ = env_flag_enabled("VIENEU_ACOUSTIC_Q8_FFN", true);
         const int64_t q8_block = ggml_blck_size(GGML_TYPE_Q8_0);
@@ -33,60 +49,19 @@ replace_once(
             use_q8_ = false;
         }
 
-        use_direct_ = !use_q8_ && use_direct_linear_backend();
+        const ggml_type weight_type = use_q8_ ? GGML_TYPE_Q8_0 : GGML_TYPE_F32;
 ''',
-    '''        // Parity build: keep original F32 FFN tensors. Q8 errors can change
-        // later autoregressive frames even when the backend itself is correct.
-        use_q8_ = false;
-        use_direct_ = use_direct_linear_backend();
+    '''        use_q8_ = false;
+        const ggml_type weight_type = GGML_TYPE_F32;
 ''',
-    "disable upstream Q8 acoustic FFN",
-)
-replace_once(
-    '''        const ggml_type weight_type = use_q8_ ? GGML_TYPE_Q8_0 : GGML_TYPE_F32;
-''',
-    '''        const ggml_type weight_type = GGML_TYPE_F32;
-''',
-    "select F32 FFN tensor type",
-)
-replace_once(
-    '''        if (use_q8_) {
-            ggml_quantize_chunk(GGML_TYPE_Q8_0, gate_weight, gate_weight_->data, 0, intermediate_dim_, hidden_dim_, nullptr);
-            ggml_quantize_chunk(GGML_TYPE_Q8_0, up_weight, up_weight_->data, 0, intermediate_dim_, hidden_dim_, nullptr);
-            ggml_quantize_chunk(GGML_TYPE_Q8_0, down_weight, down_weight_->data, 0, hidden_dim_, intermediate_dim_, nullptr);
-        } else {
-            std::memcpy(gate_weight_->data, gate_weight, static_cast<size_t>(intermediate_dim_) * hidden_dim_ * sizeof(float));
-            std::memcpy(up_weight_->data, up_weight, static_cast<size_t>(intermediate_dim_) * hidden_dim_ * sizeof(float));
-            std::memcpy(down_weight_->data, down_weight, static_cast<size_t>(hidden_dim_) * intermediate_dim_ * sizeof(float));
-        }
-''',
-    '''        std::memcpy(gate_weight_->data, gate_weight, static_cast<size_t>(intermediate_dim_) * hidden_dim_ * sizeof(float));
-        std::memcpy(up_weight_->data, up_weight, static_cast<size_t>(intermediate_dim_) * hidden_dim_ * sizeof(float));
-        std::memcpy(down_weight_->data, down_weight, static_cast<size_t>(hidden_dim_) * intermediate_dim_ * sizeof(float));
-''',
-    "upload original F32 FFN weights",
+    'select F32 acoustic FFN weights',
 )
 
-required = (
-    "backend = ggml_backend_cpu_init();",
-    "const ggml_type weight_type = GGML_TYPE_F32;",
-    "use_q8_ = false;",
-    "std::memcpy(gate_weight_->data, gate_weight",
-    "std::memcpy(up_weight_->data, up_weight",
-    "std::memcpy(down_weight_->data, down_weight",
+replace_once(
+    ''' backend=OpenCL qkv=F16 o_proj=F16 ffn=Q8_0 heads=F32 cpu_fallback=0''',
+    ''' backend=OpenCL qkv=F32 o_proj=F32 ffn=F32 heads=F32 cpu_fallback=0''',
+    'full-F32 quality diagnostics mode',
 )
-forbidden = (
-    "ggml_backend_opencl_init()",
-    "env_flag_enabled(\"VIENEU_ACOUSTIC_Q8_FFN\"",
-    "ggml_quantize_chunk(GGML_TYPE_Q8_0",
-    "OpenCL acoustic",
-)
-missing = [item for item in required if item not in text]
-found = [item for item in forbidden if item in text]
-if missing or found:
-    raise RuntimeError(
-        f"full acoustic CPU/F32 verification failed: missing={missing}, forbidden={found}"
-    )
 
-path.write_text(text, encoding="utf-8")
-print("Parity mode: upstream CPU acoustic attention, FFN, heads and EOS use original F32 weights")
+path.write_text(text, encoding='utf-8')
+print('Applied full-F32 acoustic weights on OpenCL; CPU fallback remains disabled')
