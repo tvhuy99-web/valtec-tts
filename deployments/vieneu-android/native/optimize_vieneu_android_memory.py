@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+'''Android-only ONNX Runtime memory retention patch.
+
+The native VieNeu pipeline uses CPU arenas for the speaker encoder and MOSS
+codec. On Android, those arenas retain large workspaces after Run(), causing RSS
+to grow after reference enrollment and again after long codec decodes. ORT 1.24.3
+supports per-run CPU arena shrinkage while keeping the arena enabled during the
+inference itself.
+
+This script intentionally patches only the pinned upstream source and fails
+closed when the expected call sites change.
+'''
+
+import pathlib
+import sys
+
+if len(sys.argv) != 2:
+    raise SystemExit('usage: optimize_vieneu_android_memory.py <vieneu-source-dir>')
+
+root = pathlib.Path(sys.argv[1])
+codec_path = root / 'src/vieneu/v3_native/v3_native_moss_codec.cpp'
+reference_path = root / 'src/vieneu/v3_native/v3_native_reference.cpp'
+
+codec = codec_path.read_text(encoding='utf-8')
+reference = reference_path.read_text(encoding='utf-8')
+
+
+def replace_once(text: str, old: str, new: str, label: str) -> str:
+    count = text.count(old)
+    if count != 1:
+        raise RuntimeError(f'{label}: expected exactly one match, found {count}')
+    return text.replace(old, new, 1)
+
+
+codec = replace_once(
+    codec,
+    '''        auto out = decode_session_->Run(
+            Ort::RunOptions{nullptr},
+            decode_in_ptrs_.data(),
+''',
+    '''        Ort::RunOptions decode_run_options;
+        decode_run_options.AddConfigEntry("memory.enable_memory_arena_shrinkage", "cpu:0");
+        auto out = decode_session_->Run(
+            decode_run_options,
+            decode_in_ptrs_.data(),
+''',
+    'MOSS decode arena shrinkage',
+)
+
+codec = replace_once(
+    codec,
+    '''        auto out = encode_session_->Run(
+            Ort::RunOptions{nullptr},
+            encode_in_ptrs_.data(),
+''',
+    '''        Ort::RunOptions encode_run_options;
+        encode_run_options.AddConfigEntry("memory.enable_memory_arena_shrinkage", "cpu:0");
+        auto out = encode_session_->Run(
+            encode_run_options,
+            encode_in_ptrs_.data(),
+''',
+    'MOSS encode arena shrinkage',
+)
+
+reference = replace_once(
+    reference,
+    '''        Ort::Value input = Ort::Value::CreateTensor<float>(mem, fbank.data(), fbank.size(), shape.data(), shape.size());
+        auto out = session_->Run(Ort::RunOptions{nullptr}, input_ptrs_.data(), &input, 1, output_ptrs_.data(), output_ptrs_.size());
+''',
+    '''        Ort::Value input = Ort::Value::CreateTensor<float>(mem, fbank.data(), fbank.size(), shape.data(), shape.size());
+        Ort::RunOptions run_options;
+        run_options.AddConfigEntry("memory.enable_memory_arena_shrinkage", "cpu:0");
+        auto out = session_->Run(run_options, input_ptrs_.data(), &input, 1, output_ptrs_.data(), output_ptrs_.size());
+''',
+    'speaker encoder arena shrinkage',
+)
+
+codec_path.write_text(codec, encoding='utf-8')
+reference_path.write_text(reference, encoding='utf-8')
+
+print('Applied Android ONNX CPU arena shrinkage to speaker encoder and MOSS codec')
