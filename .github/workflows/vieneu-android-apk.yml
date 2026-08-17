@@ -1,4 +1,4 @@
-name: VieNeu Android OpenCL APK
+name: VieNeu Android OpenCL Quality APK
 
 on:
   workflow_dispatch:
@@ -95,6 +95,42 @@ jobs:
           git -C .build/vieneu-src rev-parse HEAD
           git -C .build/vieneu-src submodule status --recursive
 
+      - name: Build Vietnamese sea-g2p for Android ARM64
+        shell: bash
+        run: |
+          set -euo pipefail
+          SEA_DIR="${GITHUB_WORKSPACE}/.build/vieneu-src/third_party/sea-g2p"
+          RUST_TARGET=aarch64-linux-android
+          TOOLCHAIN="${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64"
+          LINKER="${TOOLCHAIN}/bin/aarch64-linux-android28-clang"
+          AR="${TOOLCHAIN}/bin/llvm-ar"
+          test -f "$SEA_DIR/Cargo.toml"
+          test -f "$SEA_DIR/include/sea_g2p.h"
+          test -s "$SEA_DIR/python/sea_g2p/sea_g2p.bin"
+          test -x "$LINKER"
+
+          rustup target add "$RUST_TARGET"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$LINKER"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_AR="$AR"
+          export RUSTFLAGS='-C target-feature=+neon'
+          cargo build \
+            --manifest-path "$SEA_DIR/Cargo.toml" \
+            --release \
+            --target "$RUST_TARGET" \
+            --target-dir "${GITHUB_WORKSPACE}/.build/sea-g2p-target"
+
+          SEA_G2P_LIBRARY="${GITHUB_WORKSPACE}/.build/sea-g2p-target/${RUST_TARGET}/release/libsea_g2p_rs.so"
+          SEA_G2P_INCLUDE_DIR="$SEA_DIR/include"
+          SEA_G2P_DICT="$SEA_DIR/python/sea_g2p/sea_g2p.bin"
+          test -f "$SEA_G2P_LIBRARY"
+          file "$SEA_G2P_LIBRARY"
+          readelf -h "$SEA_G2P_LIBRARY" | grep 'AArch64'
+          readelf -d "$SEA_G2P_LIBRARY" | grep NEEDED || true
+
+          echo "SEA_G2P_LIBRARY=$SEA_G2P_LIBRARY" >> "$GITHUB_ENV"
+          echo "SEA_G2P_INCLUDE_DIR=$SEA_G2P_INCLUDE_DIR" >> "$GITHUB_ENV"
+          echo "SEA_G2P_DICT=$SEA_G2P_DICT" >> "$GITHUB_ENV"
+
       - name: Instrument VieNeu core diagnostics
         run: |
           python3 deployments/vieneu-android/native/instrument_vieneu_diagnostics.py .build/vieneu-src
@@ -166,6 +202,8 @@ jobs:
           set -euo pipefail
           test -f "$OPENCL_LIBRARY"
           test -f "$OPENCL_INCLUDE_DIR/CL/cl.h"
+          test -f "$SEA_G2P_LIBRARY"
+          test -f "$SEA_G2P_INCLUDE_DIR/sea_g2p.h"
 
           cmake -S deployments/vieneu-android/native -B .build/vieneu-android-native -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK}/build/cmake/android.toolchain.cmake" \
@@ -179,6 +217,8 @@ jobs:
             -DONNXRUNTIME_ROOT="${GITHUB_WORKSPACE}/.build/ort-sdk" \
             -DOpenCL_INCLUDE_DIR="$OPENCL_INCLUDE_DIR" \
             -DOpenCL_LIBRARY="$OPENCL_LIBRARY" \
+            -DSEA_G2P_INCLUDE_DIR="$SEA_G2P_INCLUDE_DIR" \
+            -DSEA_G2P_LIBRARY="$SEA_G2P_LIBRARY" \
             -DVIENEU_PORTABLE_CPU=ON \
             -DVIENEU_NATIVE_BACKEND=cpu \
             -DGGML_OPENCL=ON \
@@ -192,13 +232,14 @@ jobs:
       - name: Build native runtime and JNI
         run: cmake --build .build/vieneu-android-native --target vieneu_jni -j2
 
-      - name: Package ARM64 native libraries
+      - name: Package ARM64 native libraries and G2P assets
         shell: bash
         run: |
           set -euo pipefail
           DEST="deployments/vieneu-android/app/src/main/jniLibs/arm64-v8a"
+          ASSETS="deployments/vieneu-android/app/src/main/assets"
           rm -rf "$DEST"
-          mkdir -p "$DEST"
+          mkdir -p "$DEST" "$ASSETS"
 
           for LIB in libvieneu_jni.so libvieneu-tts.so libllama.so libggml.so libggml-cpu.so libggml-base.so libggml-opencl.so; do
             SRC="$(find .build/vieneu-android-native -type f -name "$LIB" | head -n 1)"
@@ -206,6 +247,9 @@ jobs:
             cp "$SRC" "$DEST/$LIB"
           done
           cp .build/ort-sdk/lib/libonnxruntime.so "$DEST/"
+          cp "$SEA_G2P_LIBRARY" "$DEST/libsea_g2p_rs.so"
+          cp "$SEA_G2P_DICT" "$ASSETS/sea_g2p.bin"
+          python3 deployments/vieneu-android/patch_android_sea_g2p_asset.py deployments/vieneu-android/app
 
           CXX_SHARED="$(find "$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64" -type f -name 'libc++_shared.so' | grep 'aarch64-linux-android' | head -n 1)"
           OMP_SHARED="$(find "$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64" -type f -name 'libomp.so' | grep -E '/aarch64/' | head -n 1)"
@@ -223,9 +267,11 @@ jobs:
           done
 
           echo "Packaged libraries:"
-          ls -lh "$DEST"
+          ls -lh "$DEST" "$ASSETS/sea_g2p.bin"
           strings "$DEST/libvieneu-tts.so" | grep 'V3NativeDiag'
           test -s "$DEST/libggml-opencl.so"
+          test -s "$DEST/libsea_g2p_rs.so"
+          test -s "$ASSETS/sea_g2p.bin"
 
           OPENCL_NEEDED="$(readelf -d "$DEST/libggml-opencl.so" | grep NEEDED || true)"
           printf '%s\n' "$OPENCL_NEEDED"
@@ -234,6 +280,10 @@ jobs:
             echo "::error::ggml-opencl requires versioned libOpenCL.so.1; Android Qualcomm library is expected as libOpenCL.so"
             exit 1
           fi
+
+          VIENEU_NEEDED="$(readelf -d "$DEST/libvieneu-tts.so" | grep NEEDED || true)"
+          printf '%s\n' "$VIENEU_NEEDED"
+          printf '%s\n' "$VIENEU_NEEDED" | grep 'libsea_g2p_rs.so'
 
           for LIB in "$DEST"/*.so; do
             file "$LIB"
@@ -246,7 +296,7 @@ jobs:
           cd deployments/vieneu-android
           ../android/gradlew --no-daemon assembleDebug
 
-      - name: Verify APK package signing and OpenCL payload
+      - name: Verify APK package signing and OpenCL quality payload
         shell: bash
         run: |
           set -euo pipefail
@@ -260,6 +310,8 @@ jobs:
           unzip -l "$APK" | grep 'lib/arm64-v8a/'
           unzip -l "$APK" | grep 'libvieneu_jni.so'
           unzip -l "$APK" | grep 'libggml-opencl.so'
+          unzip -l "$APK" | grep 'libsea_g2p_rs.so'
+          unzip -l "$APK" | grep 'assets/sea_g2p.bin'
           unzip -l "$APK" | grep 'libomp.so'
           unzip -l "$APK" | grep 'libc++_shared.so'
           if unzip -l "$APK" | grep -q 'lib/arm64-v8a/libOpenCL.so'; then
@@ -284,10 +336,10 @@ jobs:
           fi
           echo "APK signing identity verified: $EXPECTED_SIGNING_SHA256"
 
-      - name: Upload OpenCL stable-debug APK
+      - name: Upload OpenCL quality stable-debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: vieneu-voice-clone-android-arm64-opencl-adreno-poc
+          name: vieneu-voice-clone-android-arm64-opencl-quality
           path: deployments/vieneu-android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
           if-no-files-found: error
