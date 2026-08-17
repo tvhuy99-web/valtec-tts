@@ -1,0 +1,166 @@
+name: VieNeu Native Numerical Parity
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/vieneu-android-opencl-poc
+    paths:
+      - ".github/workflows/vieneu-native-parity.yml"
+      - "deployments/vieneu-android/parity/**"
+
+permissions:
+  contents: read
+
+env:
+  CPP_COMMIT: 838979faf0354ffb3dff898e30b709f644fa7db4
+  ORT_VERSION: 1.24.4
+  HF_HUB_DISABLE_PROGRESS_BARS: "1"
+  TOKENIZERS_PARALLELISM: "false"
+
+jobs:
+  parity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout audit scripts
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Python audit dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            "huggingface_hub[hf_xet]>=0.34" \
+            "onnxruntime==${ORT_VERSION}" \
+            numpy tokenizers soundfile
+
+      - name: Clone pinned native and official reference sources
+        run: |
+          git clone --recursive https://github.com/dduongtrandai/VieNeu-TTS.cpp.git upstream-cpp
+          git -C upstream-cpp checkout "${CPP_COMMIT}"
+          git -C upstream-cpp submodule update --init --recursive
+          git clone --depth 1 https://github.com/pnnbao97/VieNeu-TTS.git official-python
+          mkdir -p parity-out/native parity-out/reference models
+          git -C upstream-cpp rev-parse HEAD | tee parity-out/cpp-source-revision.txt
+          git -C official-python rev-parse HEAD | tee parity-out/python-source-revision.txt
+
+      - name: Instrument native parity checkpoints
+        run: |
+          python deployments/vieneu-android/parity/patch_native_parity_includes.py upstream-cpp
+          python deployments/vieneu-android/parity/patch_native_parity.py upstream-cpp
+
+      - name: Download pinned-shape model packages and record revisions
+        run: |
+          python - <<'PY'
+          import json
+          from huggingface_hub import HfApi, snapshot_download
+
+          api = HfApi()
+          native_repo = "lastudio-community/VieNeu-TTS-v3-Turbo-CPP"
+          official_repo = "pnnbao-ump/VieNeu-TTS-v3-Turbo"
+          native_info = api.model_info(native_repo)
+          official_info = api.model_info(official_repo)
+          snapshot_download(repo_id=native_repo, revision=native_info.sha, local_dir="models/native")
+          snapshot_download(
+              repo_id=official_repo,
+              revision=official_info.sha,
+              allow_patterns=["onnx_update/*"],
+              local_dir="models/official",
+          )
+          revisions = {
+              "native_repo": native_repo,
+              "native_revision": native_info.sha,
+              "official_repo": official_repo,
+              "official_revision": official_info.sha,
+          }
+          with open("parity-out/model-revisions.json", "w", encoding="utf-8") as handle:
+              json.dump(revisions, handle, ensure_ascii=False, indent=2)
+          print(json.dumps(revisions, indent=2))
+          PY
+          python - <<'PY' >> "$GITHUB_ENV"
+          import json
+          data = json.load(open("models/native/voices_v3_turbo.json", encoding="utf-8"))
+          voice = data.get("default_voice") or next(iter(data["presets"]))
+          print(f"PARITY_VOICE={voice}")
+          PY
+
+      - name: Download ONNX Runtime C++ SDK
+        run: |
+          curl --fail --location --retry 5 --retry-delay 3 \
+            -o onnxruntime.tgz \
+            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz"
+          tar -xzf onnxruntime.tgz
+          mv "onnxruntime-linux-x64-${ORT_VERSION}" onnxruntime-sdk
+
+      - name: Build clean native CPU F32 reference executable
+        run: |
+          cmake -S upstream-cpp -B native-build -G Ninja \
+            -DONNXRUNTIME_ROOT="$GITHUB_WORKSPACE/onnxruntime-sdk" \
+            -DVIENEU_PORTABLE_CPU=ON \
+            -DVIENEU_NATIVE_BACKEND=cpu \
+            -DVIENEU_SEA_G2P=OFF \
+            -DBUILD_TESTING=OFF \
+            -DGGML_OPENMP=OFF \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build native-build --target vieneu-tts-cli --parallel 2
+          find native-build -maxdepth 4 -type f -name 'vieneu-tts-cli*' -print
+
+      - name: Run native C++ deterministic preset test
+        env:
+          VIENEU_PARITY_PHONEMES: "zˈaː6w nˈa2j bˈaː6n kˈɔɜ xwˈɛ4 xˌoŋ"
+          VIENEU_PARITY_DIR: ${{ github.workspace }}/parity-out/native
+          VIENEU_V3_NATIVE_DEBUG_TAGS: "1"
+          VIENEU_V3_NATIVE_BENCHMARK: "1"
+          OMP_NUM_THREADS: "2"
+        run: |
+          CLI="$(find native-build -type f -name 'vieneu-tts-cli' -perm -111 | head -n 1)"
+          test -n "$CLI"
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/onnxruntime-sdk/lib:$(dirname "$CLI"):${LD_LIBRARY_PATH:-}"
+          "$CLI" \
+            --profile vieneu-v3-native \
+            --model-dir "$GITHUB_WORKSPACE/models/native" \
+            --codec-dir "$GITHUB_WORKSPACE/models/native/codec" \
+            --voice "$PARITY_VOICE" \
+            --style tu_nhien \
+            --text parity \
+            --temperature 0 \
+            --top-k 0 \
+            --top-p 1 \
+            --max-new-frames 80 \
+            --threads 2 \
+            --output "$GITHUB_WORKSPACE/parity-out/native/native.wav" \
+            2>&1 | tee parity-out/native/native-run.log
+
+      - name: Run official ONNX deterministic preset test
+        run: |
+          python deployments/vieneu-android/parity/run_reference_parity.py \
+            --official-source official-python \
+            --onnx-dir models/official/onnx_update \
+            --model-dir models/native \
+            --codec-dir models/native/codec \
+            --output-dir parity-out/reference \
+            --max-frames 80 \
+            2>&1 | tee parity-out/reference/reference-run.log
+
+      - name: Locate first numerical divergence
+        run: |
+          python deployments/vieneu-android/parity/compare_parity.py \
+            --native-dir parity-out/native \
+            --reference-dir parity-out/reference \
+            --output parity-out/parity-report.json \
+            2>&1 | tee parity-out/parity-report.log
+
+      - name: Upload complete parity evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: vieneu-native-numerical-parity
+          path: parity-out
+          if-no-files-found: error
+          retention-days: 30

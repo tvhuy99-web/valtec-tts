@@ -1,0 +1,105 @@
+name: VieNeu Android Native POC
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/vieneu-android-poc
+    paths:
+      - '.github/workflows/vieneu-android-native-poc.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-arm64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      NDK_VERSION: 29.0.14206865
+      ORT_VERSION: 1.24.3
+
+    steps:
+      - name: Checkout build lab
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android NDK and build tools
+        run: |
+          sdkmanager "ndk;${NDK_VERSION}" "cmake;3.31.6" "platform-tools"
+          echo "ANDROID_NDK=${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Install host build dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build unzip curl git
+
+      - name: Clone VieNeu-TTS.cpp with llama.cpp
+        run: |
+          git clone --depth 1 --recurse-submodules --shallow-submodules \
+            https://github.com/dduongtrandai/VieNeu-TTS.cpp.git vieneu-src
+          git -C vieneu-src rev-parse HEAD
+          git -C vieneu-src/third_party/llama.cpp rev-parse HEAD
+
+      - name: Prepare ONNX Runtime Android C++ SDK
+        run: |
+          mkdir -p ort-aar ort-sdk/include ort-sdk/lib
+          curl -fL --retry 3 \
+            "https://repo1.maven.org/maven2/com/microsoft/onnxruntime/onnxruntime-android/${ORT_VERSION}/onnxruntime-android-${ORT_VERSION}.aar" \
+            -o onnxruntime-android.aar
+          unzip -q onnxruntime-android.aar -d ort-aar
+          test -f ort-aar/jni/arm64-v8a/libonnxruntime.so
+          cp ort-aar/jni/arm64-v8a/libonnxruntime.so ort-sdk/lib/
+          git clone --depth 1 --branch "v${ORT_VERSION}" \
+            https://github.com/microsoft/onnxruntime.git ort-src
+          cp ort-src/include/onnxruntime/core/session/*.h ort-sdk/include/
+          test -f ort-sdk/include/onnxruntime_c_api.h
+          test -f ort-sdk/include/onnxruntime_cxx_api.h
+          ls -lh ort-sdk/include/onnxruntime_c_api.h ort-sdk/lib/libonnxruntime.so
+
+      - name: Configure Android ARM64 native build
+        run: |
+          cmake -S vieneu-src -B vieneu-build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK}/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-28 \
+            -DANDROID_STL=c++_shared \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
+            -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH \
+            -DONNXRUNTIME_ROOT="${GITHUB_WORKSPACE}/ort-sdk" \
+            -DVIENEU_LLAMA_DIR="${GITHUB_WORKSPACE}/vieneu-src/third_party/llama.cpp" \
+            -DVIENEU_PORTABLE_CPU=ON \
+            -DVIENEU_NATIVE_BACKEND=cpu \
+            -DVIENEU_SEA_G2P=OFF \
+            -DBUILD_TESTING=OFF \
+            -DGGML_OPENMP=OFF \
+            -DGGML_LLAMAFILE=OFF
+
+      - name: Build VieNeu shared library for Android
+        run: cmake --build vieneu-build --target vieneu-tts -j2
+
+      - name: Collect Android native libraries
+        run: |
+          mkdir -p artifact/arm64-v8a
+          find vieneu-build -type f \( -name '*.so' -o -name '*.a' \) -print
+          cp vieneu-build/libvieneu-tts.so artifact/arm64-v8a/
+          cp ort-sdk/lib/libonnxruntime.so artifact/arm64-v8a/
+          find vieneu-build -type f -name 'libggml*.so' -exec cp -n {} artifact/arm64-v8a/ \; || true
+          find vieneu-build -type f -name 'libllama.so' -exec cp -n {} artifact/arm64-v8a/ \; || true
+          ls -lh artifact/arm64-v8a
+          file artifact/arm64-v8a/*.so
+
+      - name: Upload Android ARM64 native proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: vieneu-android-arm64-native-poc
+          path: artifact/arm64-v8a/
+          retention-days: 30
+          if-no-files-found: error

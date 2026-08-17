@@ -1,0 +1,345 @@
+name: VieNeu Android OpenCL Quality APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/vieneu-android-opencl-poc
+    paths:
+      - 'deployments/vieneu-android/**'
+      - '.github/signing/vieneu-stable-debug.keystore.b64'
+      - '.github/workflows/vieneu-android-apk.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      NDK_VERSION: 29.0.14206865
+      ORT_VERSION: 1.24.3
+      VIENEU_COMMIT: 838979faf0354ffb3dff898e30b709f644fa7db4
+      OPENCL_HEADERS_TAG: v2026.05.29
+      OPENCL_HEADERS_COMMIT: 6fe718c31a45fe25151362a72ef041c3a1047cbd
+      OPENCL_LOADER_TAG: v2026.05.29
+      OPENCL_LOADER_COMMIT: b7bd2803acc779c03d96588e9ca9e9568a18698a
+      EXPECTED_SIGNING_SHA256: FE:68:B5:9D:82:7C:1E:C0:6D:81:21:61:42:47:6B:12:62:45:56:35:DE:72:5D:5C:0E:47:53:FD:4A:3A:97:1D
+      EXPECTED_DEBUG_PACKAGE: com.vieneu.voiceclone.debug
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Verify repository stable debug signing key
+        shell: bash
+        run: |
+          set -euo pipefail
+          B64='.github/signing/vieneu-stable-debug.keystore.b64'
+          KEYSTORE="${RUNNER_TEMP}/vieneu-stable-debug.p12"
+          test -s "$B64"
+          base64 --decode "$B64" > "$KEYSTORE"
+          chmod 600 "$KEYSTORE"
+
+          ACTUAL_FP="$(keytool -list -v \
+            -keystore "$KEYSTORE" \
+            -storetype PKCS12 \
+            -storepass android \
+            -alias vieneu | sed -n 's/^[[:space:]]*SHA256: //p' | head -n 1)"
+
+          if [ "$ACTUAL_FP" != "$EXPECTED_SIGNING_SHA256" ]; then
+            echo "::error::Stable debug keystore fingerprint mismatch. Expected $EXPECTED_SIGNING_SHA256, got $ACTUAL_FP"
+            exit 1
+          fi
+          echo "Stable debug signing certificate verified: $ACTUAL_FP"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install NDK and native build tools
+        run: |
+          sdkmanager "ndk;${NDK_VERSION}" "cmake;3.31.6" "platforms;android-34" "build-tools;34.0.0"
+          echo "ANDROID_NDK=${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+          sudo apt-get update
+          sudo apt-get install -y ninja-build unzip curl git
+
+      - name: Clone pinned VieNeu and Khronos OpenCL sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .build
+
+          git clone --depth 1 https://github.com/dduongtrandai/VieNeu-TTS.cpp.git .build/vieneu-src
+          git -C .build/vieneu-src fetch --depth 1 origin "${VIENEU_COMMIT}"
+          git -C .build/vieneu-src checkout --detach "${VIENEU_COMMIT}"
+          git -C .build/vieneu-src submodule sync --recursive
+          git -C .build/vieneu-src submodule update --init --recursive --depth 1
+          test "$(git -C .build/vieneu-src rev-parse HEAD)" = "${VIENEU_COMMIT}"
+
+          git clone --depth 1 --branch "${OPENCL_HEADERS_TAG}" \
+            https://github.com/KhronosGroup/OpenCL-Headers.git .build/OpenCL-Headers
+          test "$(git -C .build/OpenCL-Headers rev-parse HEAD)" = "${OPENCL_HEADERS_COMMIT}"
+          test -f .build/OpenCL-Headers/CL/cl.h
+
+          git clone --depth 1 --branch "${OPENCL_LOADER_TAG}" \
+            https://github.com/KhronosGroup/OpenCL-ICD-Loader.git .build/OpenCL-ICD-Loader
+          test "$(git -C .build/OpenCL-ICD-Loader rev-parse HEAD)" = "${OPENCL_LOADER_COMMIT}"
+
+          git -C .build/vieneu-src rev-parse HEAD
+          git -C .build/vieneu-src submodule status --recursive
+
+      - name: Build Vietnamese sea-g2p for Android ARM64
+        shell: bash
+        run: |
+          set -euo pipefail
+          SEA_DIR="${GITHUB_WORKSPACE}/.build/vieneu-src/third_party/sea-g2p"
+          RUST_TARGET=aarch64-linux-android
+          TOOLCHAIN="${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64"
+          LINKER="${TOOLCHAIN}/bin/aarch64-linux-android28-clang"
+          AR="${TOOLCHAIN}/bin/llvm-ar"
+          test -f "$SEA_DIR/Cargo.toml"
+          test -f "$SEA_DIR/include/sea_g2p.h"
+          test -s "$SEA_DIR/python/sea_g2p/sea_g2p.bin"
+          test -x "$LINKER"
+
+          rustup target add "$RUST_TARGET"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$LINKER"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_AR="$AR"
+          export RUSTFLAGS='-C target-feature=+neon'
+          cargo build \
+            --manifest-path "$SEA_DIR/Cargo.toml" \
+            --release \
+            --target "$RUST_TARGET" \
+            --target-dir "${GITHUB_WORKSPACE}/.build/sea-g2p-target"
+
+          SEA_G2P_LIBRARY="${GITHUB_WORKSPACE}/.build/sea-g2p-target/${RUST_TARGET}/release/libsea_g2p_rs.so"
+          SEA_G2P_INCLUDE_DIR="$SEA_DIR/include"
+          SEA_G2P_DICT="$SEA_DIR/python/sea_g2p/sea_g2p.bin"
+          test -f "$SEA_G2P_LIBRARY"
+          file "$SEA_G2P_LIBRARY"
+          readelf -h "$SEA_G2P_LIBRARY" | grep 'AArch64'
+          readelf -d "$SEA_G2P_LIBRARY" | grep NEEDED || true
+
+          echo "SEA_G2P_LIBRARY=$SEA_G2P_LIBRARY" >> "$GITHUB_ENV"
+          echo "SEA_G2P_INCLUDE_DIR=$SEA_G2P_INCLUDE_DIR" >> "$GITHUB_ENV"
+          echo "SEA_G2P_DICT=$SEA_G2P_DICT" >> "$GITHUB_ENV"
+
+      - name: Instrument VieNeu core diagnostics
+        run: |
+          python3 deployments/vieneu-android/native/instrument_vieneu_diagnostics.py .build/vieneu-src
+          git -C .build/vieneu-src diff --check
+          grep -n 'V3NativeDiag' .build/vieneu-src/src/vieneu/v3_native/vieneu_v3_native.cpp
+
+      - name: Build Android OpenCL link library
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # We use the Khronos loader only as a build-time link library. Remove its
+          # versioned SONAME so ggml-opencl records NEEDED libOpenCL.so, matching the
+          # Qualcomm vendor library exposed by Android devices. The loader itself is
+          # intentionally NOT packaged in the APK.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('.build/OpenCL-ICD-Loader/CMakeLists.txt')
+          s = p.read_text()
+          old = 'set_target_properties (OpenCL PROPERTIES VERSION 1\\.0\\.0 SOVERSION "1")'
+          new = 'set_target_properties (OpenCL PROPERTIES NO_SONAME TRUE)'
+          if s.count(old) != 1:
+              raise SystemExit(f'OpenCL loader SONAME patch expected one match, found {s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+          PY
+
+          cmake -S .build/OpenCL-ICD-Loader -B .build/opencl-loader -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK}/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-28 \
+            -DANDROID_STL=c++_shared \
+            -DOPENCL_ICD_LOADER_HEADERS_DIR="${GITHUB_WORKSPACE}/.build/OpenCL-Headers" \
+            -DOPENCL_ICD_LOADER_BUILD_SHARED_LIBS=ON \
+            -DENABLE_OPENCL_LAYERS=OFF \
+            -DENABLE_OPENCL_LOADER_MANAGED_DISPATCH=OFF \
+            -DOPENCL_ICD_LOADER_BUILD_TESTING=OFF \
+            -DBUILD_TESTING=OFF
+          cmake --build .build/opencl-loader --target OpenCL -j2
+
+          OPENCL_LIBRARY="$(find -L .build/opencl-loader -type f -name 'libOpenCL.so' | head -n 1)"
+          test -n "$OPENCL_LIBRARY"
+          OPENCL_LIBRARY="$(realpath "$OPENCL_LIBRARY")"
+          OPENCL_INCLUDE_DIR="${GITHUB_WORKSPACE}/.build/OpenCL-Headers"
+          test -f "$OPENCL_LIBRARY"
+          test -f "$OPENCL_INCLUDE_DIR/CL/cl.h"
+
+          echo "OPENCL_LIBRARY=$OPENCL_LIBRARY" >> "$GITHUB_ENV"
+          echo "OPENCL_INCLUDE_DIR=$OPENCL_INCLUDE_DIR" >> "$GITHUB_ENV"
+          echo "OpenCL build-time library: $OPENCL_LIBRARY"
+          readelf -d "$OPENCL_LIBRARY" | grep -E 'SONAME|NEEDED' || true
+
+      - name: Prepare ONNX Runtime Android C++ SDK
+        run: |
+          mkdir -p .build/ort-aar .build/ort-sdk/include .build/ort-sdk/lib
+          curl -fL --retry 3 \
+            "https://repo1.maven.org/maven2/com/microsoft/onnxruntime/onnxruntime-android/${ORT_VERSION}/onnxruntime-android-${ORT_VERSION}.aar" \
+            -o .build/onnxruntime-android.aar
+          unzip -q .build/onnxruntime-android.aar -d .build/ort-aar
+          cp .build/ort-aar/jni/arm64-v8a/libonnxruntime.so .build/ort-sdk/lib/
+          git clone --depth 1 --branch "v${ORT_VERSION}" \
+            https://github.com/microsoft/onnxruntime.git .build/ort-src
+          cp .build/ort-src/include/onnxruntime/core/session/*.h .build/ort-sdk/include/
+          test -f .build/ort-sdk/include/onnxruntime_cxx_api.h
+          test -f .build/ort-sdk/lib/libonnxruntime.so
+
+      - name: Configure Android native runtime and JNI with OpenCL
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "$OPENCL_LIBRARY"
+          test -f "$OPENCL_INCLUDE_DIR/CL/cl.h"
+          test -f "$SEA_G2P_LIBRARY"
+          test -f "$SEA_G2P_INCLUDE_DIR/sea_g2p.h"
+
+          cmake -S deployments/vieneu-android/native -B .build/vieneu-android-native -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK}/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-28 \
+            -DANDROID_STL=c++_shared \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
+            -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH \
+            -DVIENEU_SOURCE_DIR="${GITHUB_WORKSPACE}/.build/vieneu-src" \
+            -DONNXRUNTIME_ROOT="${GITHUB_WORKSPACE}/.build/ort-sdk" \
+            -DOpenCL_INCLUDE_DIR="$OPENCL_INCLUDE_DIR" \
+            -DOpenCL_LIBRARY="$OPENCL_LIBRARY" \
+            -DSEA_G2P_INCLUDE_DIR="$SEA_G2P_INCLUDE_DIR" \
+            -DSEA_G2P_LIBRARY="$SEA_G2P_LIBRARY" \
+            -DVIENEU_PORTABLE_CPU=ON \
+            -DVIENEU_NATIVE_BACKEND=cpu \
+            -DGGML_OPENCL=ON \
+            -DGGML_OPENCL_EMBED_KERNELS=ON \
+            -DGGML_OPENCL_USE_ADRENO_KERNELS=ON \
+            -DVIENEU_SEA_G2P=OFF \
+            -DBUILD_TESTING=OFF \
+            -DGGML_OPENMP=OFF \
+            -DGGML_LLAMAFILE=OFF
+
+      - name: Build native runtime and JNI
+        run: cmake --build .build/vieneu-android-native --target vieneu_jni -j2
+
+      - name: Package ARM64 native libraries and G2P assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEST="deployments/vieneu-android/app/src/main/jniLibs/arm64-v8a"
+          ASSETS="deployments/vieneu-android/app/src/main/assets"
+          rm -rf "$DEST"
+          mkdir -p "$DEST" "$ASSETS"
+
+          for LIB in libvieneu_jni.so libvieneu-tts.so libllama.so libggml.so libggml-cpu.so libggml-base.so libggml-opencl.so; do
+            SRC="$(find .build/vieneu-android-native -type f -name "$LIB" | head -n 1)"
+            test -n "$SRC"
+            cp "$SRC" "$DEST/$LIB"
+          done
+          cp .build/ort-sdk/lib/libonnxruntime.so "$DEST/"
+          cp "$SEA_G2P_LIBRARY" "$DEST/libsea_g2p_rs.so"
+          cp "$SEA_G2P_DICT" "$ASSETS/sea_g2p.bin"
+          python3 deployments/vieneu-android/patch_android_sea_g2p_asset.py deployments/vieneu-android/app
+
+          CXX_SHARED="$(find "$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64" -type f -name 'libc++_shared.so' | grep 'aarch64-linux-android' | head -n 1)"
+          OMP_SHARED="$(find "$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64" -type f -name 'libomp.so' | grep -E '/aarch64/' | head -n 1)"
+          test -n "$CXX_SHARED"
+          test -n "$OMP_SHARED"
+          cp "$CXX_SHARED" "$DEST/libc++_shared.so"
+          cp "$OMP_SHARED" "$DEST/libomp.so"
+
+          # libOpenCL.so must come from the Qualcomm device, not from the APK.
+          test ! -e "$DEST/libOpenCL.so"
+
+          STRIP="$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          for LIB in "$DEST"/*.so; do
+            "$STRIP" --strip-unneeded "$LIB" || true
+          done
+
+          echo "Packaged libraries:"
+          ls -lh "$DEST" "$ASSETS/sea_g2p.bin"
+          strings "$DEST/libvieneu-tts.so" | grep 'V3NativeDiag'
+          test -s "$DEST/libggml-opencl.so"
+          test -s "$DEST/libsea_g2p_rs.so"
+          test -s "$ASSETS/sea_g2p.bin"
+
+          OPENCL_NEEDED="$(readelf -d "$DEST/libggml-opencl.so" | grep NEEDED || true)"
+          printf '%s\n' "$OPENCL_NEEDED"
+          printf '%s\n' "$OPENCL_NEEDED" | grep 'libOpenCL.so'
+          if printf '%s\n' "$OPENCL_NEEDED" | grep -q 'libOpenCL.so.1'; then
+            echo "::error::ggml-opencl requires versioned libOpenCL.so.1; Android Qualcomm library is expected as libOpenCL.so"
+            exit 1
+          fi
+
+          VIENEU_NEEDED="$(readelf -d "$DEST/libvieneu-tts.so" | grep NEEDED || true)"
+          printf '%s\n' "$VIENEU_NEEDED"
+          printf '%s\n' "$VIENEU_NEEDED" | grep 'libsea_g2p_rs.so'
+
+          for LIB in "$DEST"/*.so; do
+            file "$LIB"
+            readelf -d "$LIB" | grep NEEDED || true
+          done
+
+      - name: Build stable-debug APK
+        run: |
+          chmod +x deployments/android/gradlew
+          cd deployments/vieneu-android
+          ../android/gradlew --no-daemon assembleDebug
+
+      - name: Verify APK package signing and OpenCL quality payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="deployments/vieneu-android/app/build/outputs/apk/debug/app-debug.apk"
+          APKSIGNER="${ANDROID_SDK_ROOT}/build-tools/34.0.0/apksigner"
+          AAPT="${ANDROID_SDK_ROOT}/build-tools/34.0.0/aapt"
+          test -f "$APK"
+          test -x "$APKSIGNER"
+          test -x "$AAPT"
+          ls -lh "$APK"
+          unzip -l "$APK" | grep 'lib/arm64-v8a/'
+          unzip -l "$APK" | grep 'libvieneu_jni.so'
+          unzip -l "$APK" | grep 'libggml-opencl.so'
+          unzip -l "$APK" | grep 'libsea_g2p_rs.so'
+          unzip -l "$APK" | grep 'assets/sea_g2p.bin'
+          unzip -l "$APK" | grep 'libomp.so'
+          unzip -l "$APK" | grep 'libc++_shared.so'
+          if unzip -l "$APK" | grep -q 'lib/arm64-v8a/libOpenCL.so'; then
+            echo "::error::APK must use Qualcomm vendor libOpenCL.so rather than packaging the Khronos build-time loader"
+            exit 1
+          fi
+
+          ACTUAL_PACKAGE="$($AAPT dump badging "$APK" | sed -n "s/^package: name='\([^']*\)'.*/\1/p" | head -n 1)"
+          if [ "$ACTUAL_PACKAGE" != "$EXPECTED_DEBUG_PACKAGE" ]; then
+            echo "::error::Unexpected APK package. Expected $EXPECTED_DEBUG_PACKAGE, got $ACTUAL_PACKAGE"
+            exit 1
+          fi
+          echo "APK package verified: $ACTUAL_PACKAGE"
+
+          VERIFY_OUTPUT="$($APKSIGNER verify --verbose --print-certs "$APK")"
+          printf '%s\n' "$VERIFY_OUTPUT"
+          ACTUAL_DIGEST="$(printf '%s\n' "$VERIFY_OUTPUT" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1 | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          EXPECTED_DIGEST="$(printf '%s' "$EXPECTED_SIGNING_SHA256" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          if [ "$ACTUAL_DIGEST" != "$EXPECTED_DIGEST" ]; then
+            echo "::error::Built APK was signed by the wrong certificate. Expected $EXPECTED_DIGEST, got $ACTUAL_DIGEST"
+            exit 1
+          fi
+          echo "APK signing identity verified: $EXPECTED_SIGNING_SHA256"
+
+      - name: Upload OpenCL quality stable-debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: vieneu-voice-clone-android-arm64-opencl-quality
+          path: deployments/vieneu-android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+          if-no-files-found: error
