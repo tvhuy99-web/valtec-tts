@@ -21,10 +21,8 @@ object ModelManager {
     private const val EXPECTED_PACKAGE_ID = "vieneu-v3-turbo-parity-rebuild-75ff82a7"
     private const val EXPECTED_SOURCE_REVISION =
         "75ff82a72f54d55ed389e1eeb12041d3c4bac7d4"
-
-    // Filled after the parity-approved release is produced. Per-file SHA-256,
-    // package ID, and source revision are still mandatory before this is set.
-    private const val EXPECTED_MANIFEST_SHA256 = ""
+    private const val EXPECTED_MANIFEST_SHA256 =
+        "32e3b33d6039f4be48534dd149887978f8dc0a0c4e6d344349970bfd3cc17074"
 
     private const val FREE_SPACE_MARGIN_BYTES = 128L * 1024L * 1024L
     private const val HTTP_RANGE_NOT_SATISFIABLE = 416
@@ -307,9 +305,7 @@ object ModelManager {
     }
 
     private fun parseAndValidateManifest(text: String, manifestSha: String): ModelManifest {
-        if (EXPECTED_MANIFEST_SHA256.isNotBlank() &&
-            !EXPECTED_MANIFEST_SHA256.equals(manifestSha, ignoreCase = true)
-        ) {
+        if (!EXPECTED_MANIFEST_SHA256.equals(manifestSha, ignoreCase = true)) {
             throw IllegalStateException(
                 "SHA-256 manifest không đúng: $manifestSha"
             )
