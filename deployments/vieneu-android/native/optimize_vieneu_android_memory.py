@@ -86,7 +86,26 @@ old_regex = 'updated, count = re.subn(pattern, replacement, text, count=1, flags
 new_regex = 'updated, count = re.subn(pattern, lambda _match: replacement, text, count=1, flags=re.DOTALL)'
 if patch_text.count(old_regex) != 1:
     raise RuntimeError('0.9.2 source patch regex helper shape changed')
-patch.write_text(patch_text.replace(old_regex, new_regex, 1), encoding='utf-8')
+patch_text = patch_text.replace(old_regex, new_regex, 1)
+
+# optimize_vieneu_android.py already inserts sys/stat.h for its session-local
+# reference cache. Convert the v0.9.2 include edit into a strict presence check
+# rather than attempting to insert the same header twice.
+old_stat_patch = '''replace_once(
+    engine,
+    '#include <stdexcept>\\n\\n#include <nlohmann/json.hpp>\\n',
+    '#include <stdexcept>\\n#include <sys/stat.h>\\n\\n#include <nlohmann/json.hpp>\\n',
+    "speaker cache stat include",
+)
+'''
+new_stat_check = '''engine_text = engine.read_text(encoding="utf-8")
+if "#include <sys/stat.h>" not in engine_text:
+    raise RuntimeError(f"{engine}: expected existing sys/stat.h include")
+'''
+if patch_text.count(old_stat_patch) != 1:
+    raise RuntimeError('0.9.2 source stat-include patch shape changed')
+patch_text = patch_text.replace(old_stat_patch, new_stat_check, 1)
+patch.write_text(patch_text, encoding='utf-8')
 
 saved_argv = sys.argv[:]
 try:
