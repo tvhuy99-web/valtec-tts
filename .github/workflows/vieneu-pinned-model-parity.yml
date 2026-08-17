@@ -1,0 +1,308 @@
+name: VieNeu Pinned Model Rebuild Parity
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/vieneu-parity-rebuild
+    paths:
+      - '.github/workflows/vieneu-pinned-model-parity.yml'
+      - 'deployments/vieneu-android/parity/**'
+
+permissions:
+  contents: read
+
+env:
+  CPP_COMMIT: 838979faf0354ffb3dff898e30b709f644fa7db4
+  OFFICIAL_SOURCE_COMMIT: 54f42abf4460e68aac79c985b9446557c2180f2f
+  OFFICIAL_MODEL_REVISION: 75ff82a72f54d55ed389e1eeb12041d3c4bac7d4
+  NATIVE_BASE_REVISION: a7b4f40050d4ff6d5225d8fd4fe6d571913844a2
+  ORT_VERSION: 1.24.4
+  HF_HUB_DISABLE_PROGRESS_BARS: '1'
+  TOKENIZERS_PARALLELISM: 'false'
+
+jobs:
+  rebuild-and-compare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout parity tooling
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install parity dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu torch
+          python -m pip install \
+            'huggingface_hub[hf_xet]>=0.34' \
+            'onnxruntime==1.24.4' \
+            numpy safetensors tokenizers transformers sentencepiece protobuf soundfile
+
+      - name: Clone pinned native and official sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --recursive https://github.com/dduongtrandai/VieNeu-TTS.cpp.git upstream-cpp
+          git -C upstream-cpp checkout "$CPP_COMMIT"
+          git -C upstream-cpp submodule update --init --recursive
+          test "$(git -C upstream-cpp rev-parse HEAD)" = "$CPP_COMMIT"
+
+          git clone https://github.com/pnnbao97/VieNeu-TTS.git official-python
+          git -C official-python checkout "$OFFICIAL_SOURCE_COMMIT"
+          test "$(git -C official-python rev-parse HEAD)" = "$OFFICIAL_SOURCE_COMMIT"
+
+          mkdir -p models/official models/pinned/acoustic evidence/native evidence/same-asset evidence/acoustic-numpy build
+          git -C upstream-cpp rev-parse HEAD | tee evidence/cpp-source-revision.txt
+          git -C upstream-cpp/third_party/llama.cpp rev-parse HEAD | tee evidence/llama-source-revision.txt
+          git -C official-python rev-parse HEAD | tee evidence/python-source-revision.txt
+
+      - name: Download exact source checkpoint and native auxiliary assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from huggingface_hub import snapshot_download
+
+          snapshot_download(
+              repo_id='lastudio-community/VieNeu-TTS-v3-Turbo-CPP',
+              revision='a7b4f40050d4ff6d5225d8fd4fe6d571913844a2',
+              local_dir='models/pinned',
+          )
+          snapshot_download(
+              repo_id='pnnbao-ump/VieNeu-TTS-v3-Turbo',
+              revision='75ff82a72f54d55ed389e1eeb12041d3c4bac7d4',
+              allow_patterns=[
+                  'update/*',
+                  'onnx_update/*',
+                  'tokenizer*',
+                  'voices_v3_turbo.json',
+                  'config.json',
+              ],
+              local_dir='models/official',
+          )
+          PY
+
+          SAFE="$(find models/official -type f -name 'model.safetensors' | head -n 1)"
+          CFG="$(find models/official -type f -path '*/update/config.json' | head -n 1)"
+          if [ -z "$CFG" ]; then CFG="$(find models/official -type f -name 'config.json' | head -n 1)"; fi
+          TOK="$(find models/official -type f -name 'tokenizer.json' | head -n 1)"
+          test -s "$SAFE"
+          test -s "$CFG"
+          test -s "$TOK"
+          echo "OFFICIAL_SAFE=$SAFE" >> "$GITHUB_ENV"
+          echo "OFFICIAL_CFG=$CFG" >> "$GITHUB_ENV"
+          echo "OFFICIAL_TOK_DIR=$(dirname "$TOK")" >> "$GITHUB_ENV"
+          sha256sum "$SAFE" "$CFG" "$TOK" | tee evidence/official-inputs.sha256
+
+      - name: Export one-checkpoint backbone heads and acoustic weights
+        shell: bash
+        run: |
+          set -euo pipefail
+          python deployments/vieneu-android/parity/prepare_standard_qwen3_backbone.py \
+            --safetensors "$OFFICIAL_SAFE" \
+            --config "$OFFICIAL_CFG" \
+            --tokenizer-dir "$OFFICIAL_TOK_DIR" \
+            --tokenizer-dir models/official/update \
+            --tokenizer-dir models/official \
+            --output-hf-dir build/qwen3-hf \
+            --output-heads models/pinned/vieneu_v3_heads.npz \
+            --output-acoustic models/pinned/acoustic/vieneu_acoustic_weights.npz \
+            --metadata evidence/export-metadata.json \
+            --source-revision "$OFFICIAL_MODEL_REVISION"
+
+          cp "$OFFICIAL_CFG" models/pinned/config.json
+          cp "$OFFICIAL_TOK_DIR/tokenizer.json" models/pinned/tokenizer.json
+
+          python upstream-cpp/third_party/llama.cpp/convert_hf_to_gguf.py \
+            build/qwen3-hf \
+            --outfile models/pinned/backbone.gguf \
+            --outtype f32
+
+          test -s models/pinned/backbone.gguf
+          test -s models/pinned/vieneu_v3_heads.npz
+          test -s models/pinned/acoustic/vieneu_acoustic_weights.npz
+          ls -lh models/pinned/backbone.gguf models/pinned/vieneu_v3_heads.npz models/pinned/acoustic/vieneu_acoustic_weights.npz
+
+      - name: Generate immutable model manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          root = Path('models/pinned')
+          required = [
+              'config.json',
+              'tokenizer.json',
+              'voices_v3_turbo.json',
+              'backbone.gguf',
+              'vieneu_v3_heads.npz',
+              'speaker_encoder.onnx',
+              'denoiser.onnx',
+              'acoustic/vieneu_acoustic_weights.npz',
+              'codec/moss_audio_tokenizer_decode_full.onnx',
+              'codec/moss_audio_tokenizer_decode_shared.data',
+              'codec/moss_audio_tokenizer_encode.onnx',
+              'codec/moss_audio_tokenizer_encode.data',
+          ]
+          files = []
+          for relative in required:
+              path = root / relative
+              if not path.is_file() or path.stat().st_size == 0:
+                  raise SystemExit(f'missing required model file: {relative}')
+              digest = hashlib.sha256()
+              with path.open('rb') as handle:
+                  for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+                      digest.update(chunk)
+              files.append({'path': relative, 'bytes': path.stat().st_size, 'sha256': digest.hexdigest()})
+          manifest = {
+              'schema': 1,
+              'package_id': 'vieneu-v3-turbo-parity-rebuild-75ff82a7',
+              'source_repository': 'pnnbao-ump/VieNeu-TTS-v3-Turbo',
+              'source_revision': '75ff82a72f54d55ed389e1eeb12041d3c4bac7d4',
+              'native_aux_repository': 'lastudio-community/VieNeu-TTS-v3-Turbo-CPP',
+              'native_aux_revision': 'a7b4f40050d4ff6d5225d8fd4fe6d571913844a2',
+              'exporter_repository': 'dduongtrandai/VieNeu-TTS.cpp',
+              'exporter_revision': '838979faf0354ffb3dff898e30b709f644fa7db4',
+              'files': files,
+          }
+          text = json.dumps(manifest, ensure_ascii=False, indent=2) + '\n'
+          (root / 'model-manifest.json').write_text(text, encoding='utf-8')
+          Path('evidence/model-manifest.json').write_text(text, encoding='utf-8')
+          print(text)
+          PY
+
+      - name: Instrument clean native runtime for numerical evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python deployments/vieneu-android/parity/patch_native_parity_includes.py upstream-cpp
+          python deployments/vieneu-android/parity/patch_native_parity.py upstream-cpp
+          git -C upstream-cpp diff --check
+
+      - name: Download ONNX Runtime C++ SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 5 --retry-delay 3 \
+            -o onnxruntime.tgz \
+            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz"
+          tar -xzf onnxruntime.tgz
+          mv "onnxruntime-linux-x64-${ORT_VERSION}" onnxruntime-sdk
+
+      - name: Build clean native CPU F32 runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S upstream-cpp -B native-build -G Ninja \
+            -DONNXRUNTIME_ROOT="$GITHUB_WORKSPACE/onnxruntime-sdk" \
+            -DVIENEU_PORTABLE_CPU=ON \
+            -DVIENEU_NATIVE_BACKEND=cpu \
+            -DVIENEU_SEA_G2P=OFF \
+            -DBUILD_TESTING=OFF \
+            -DGGML_OPENMP=OFF \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build native-build --target vieneu-tts-cli --parallel 2
+
+      - name: Run true-greedy native preset trace
+        env:
+          VIENEU_PARITY_PHONEMES: 'zˈaː6w nˈa2j bˈaː6n kˈɔɜ xwˈɛ4 xˌoŋ'
+          VIENEU_PARITY_DIR: ${{ github.workspace }}/evidence/native
+          VIENEU_PARITY_FORCE_GREEDY: '1'
+          VIENEU_V3_NATIVE_DEBUG_TAGS: '1'
+          VIENEU_V3_NATIVE_BENCHMARK: '1'
+          VIENEU_ACOUSTIC_Q8_FFN: '0'
+          VIENEU_ACOUSTIC_DIRECT_LINEAR: '1'
+          VIENEU_ACOUSTIC_GGML_HEADS: '0'
+          OMP_NUM_THREADS: '2'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_ENV"
+          import json
+          data = json.load(open('models/pinned/voices_v3_turbo.json', encoding='utf-8'))
+          print('PARITY_VOICE=' + (data.get('default_voice') or next(iter(data['presets']))))
+          PY
+          CLI="$(find native-build -type f -name 'vieneu-tts-cli' -perm -111 | head -n 1)"
+          test -n "$CLI"
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/onnxruntime-sdk/lib:$(dirname "$CLI"):${LD_LIBRARY_PATH:-}"
+          "$CLI" \
+            --profile vieneu-v3-native \
+            --model-dir "$GITHUB_WORKSPACE/models/pinned" \
+            --codec-dir "$GITHUB_WORKSPACE/models/pinned/codec" \
+            --voice "$PARITY_VOICE" \
+            --style tu_nhien \
+            --text parity \
+            --max-new-frames 80 \
+            --threads 2 \
+            --output "$GITHUB_WORKSPACE/evidence/native/native.wav" \
+            2>&1 | tee evidence/native/native-run.log
+
+      - name: Compare acoustic C++ with same-weight NumPy oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          python deployments/vieneu-android/parity/run_native_acoustic_numpy_parity.py \
+            --native-model-dir models/pinned \
+            --native-dump-dir evidence/native \
+            --output evidence/acoustic-numpy/report.json \
+            2>&1 | tee evidence/acoustic-numpy/run.log
+
+      - name: Compare rebuilt native package with official ONNX
+        shell: bash
+        run: |
+          set -euo pipefail
+          python deployments/vieneu-android/parity/run_same_asset_parity.py \
+            --official-source official-python \
+            --onnx-dir models/official/onnx_update \
+            --native-model-dir models/pinned \
+            --native-dump-dir evidence/native \
+            --output-dir evidence/same-asset \
+            2>&1 | tee evidence/same-asset/run.log
+
+      - name: Enforce strict parity thresholds
+        id: strict_parity
+        continue-on-error: true
+        shell: bash
+        run: |
+          python deployments/vieneu-android/parity/validate_pinned_model_parity.py \
+            --same-asset-report evidence/same-asset/report.json \
+            --acoustic-report evidence/acoustic-numpy/report.json \
+            --summary evidence/parity-summary.json
+
+      - name: Upload parity evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vieneu-pinned-model-parity-evidence
+          path: evidence
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload parity-approved model pack
+        if: steps.strict_parity.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vieneu-v3-turbo-pinned-parity-model
+          path: models/pinned
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+      - name: Fail build when numerical parity is not proven
+        if: steps.strict_parity.outcome != 'success'
+        shell: bash
+        run: |
+          echo '::error::The rebuilt model did not pass strict numerical parity. Inspect the uploaded evidence artifact.'
+          exit 1
