@@ -55,7 +55,13 @@ print('Patched Qualcomm subgroup shuffle aliases in: ' + ', '.join(patched))
 
 
 def rawify_replacement_literals(source: str, script_name: str) -> str:
-    '''Preserve C++ escapes in the replacement argument of replace_once calls.'''
+    '''Preserve C++ escapes only in genuinely multiline replacement snippets.
+
+    Single-line Python literals such as the include block intentionally use
+    ``\\n`` to construct source line breaks and must remain ordinary strings.
+    Multiline replacement snippets already contain real structural newlines;
+    making only those raw preserves C++ escapes such as ``"\\n"``.
+    '''
     tree = ast.parse(source, filename=script_name)
     line_offsets = [0]
     for line in source.splitlines(keepends=True):
@@ -72,14 +78,25 @@ def rawify_replacement_literals(source: str, script_name: str) -> str:
         replacement = node.args[1]
         if not isinstance(replacement, ast.Constant) or not isinstance(replacement.value, str):
             raise RuntimeError(f'{script_name}: replace_once replacement is not a string literal')
+        if replacement.end_lineno is None or replacement.end_col_offset is None:
+            raise RuntimeError(f'{script_name}: replacement literal has no source range')
 
         start = line_offsets[replacement.lineno - 1] + replacement.col_offset
-        match = re.match(r'(?i)([rubf]*)(\'\'\'|""")', source[start:])
+        end = line_offsets[replacement.end_lineno - 1] + replacement.end_col_offset
+        token_source = source[start:end]
+        match = re.match(r'(?i)([rubf]*)(\'\'\'|""")', token_source)
         if not match:
             raise RuntimeError(
                 f'{script_name}:{replacement.lineno}: replacement must use a triple-quoted string literal')
         prefix = match.group(1).lower()
-        if 'r' not in prefix:
+        delimiter = match.group(2)
+        if not token_source.endswith(delimiter):
+            raise RuntimeError(f'{script_name}:{replacement.lineno}: malformed replacement literal')
+        body = token_source[match.end():-len(delimiter)]
+
+        # A real newline means the snippet's C++ structure is already encoded
+        # literally. Raw mode is then safe and required to retain C++ escapes.
+        if 'r' not in prefix and '\n' in body:
             insertions.append(start)
 
     if not insertions:
