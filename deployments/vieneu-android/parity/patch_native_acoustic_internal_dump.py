@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dump native acoustic decoder hidden states around its incremental KV cache."""
+"""Dump native acoustic decoder hidden states and first-prefill sub-stages."""
 
 from __future__ import annotations
 
@@ -68,6 +68,86 @@ using BenchClock = std::chrono::steady_clock;
 )
 
 replace_once(
+    '''        normed.resize(static_cast<size_t>(S * H));
+        q.resize(static_cast<size_t>(S * H));
+''',
+    '''        const bool trace_initial_prefill =
+            S == 2 && positions[0] == 0 && positions[1] == 1 &&
+            caches.size() > 0 && caches[0].used == 0;
+        if (trace_initial_prefill) {
+            dump_acoustic_f32("native_trace_00_x_plus_position.f32", x.data(), x.size());
+        }
+
+        normed.resize(static_cast<size_t>(S * H));
+        q.resize(static_cast<size_t>(S * H));
+''',
+    "trace positioned inputs",
+)
+
+replace_once(
+    '''            const int new_used = past + S;
+            {
+''',
+    '''            if (trace_initial_prefill && layer == 0) {
+                dump_acoustic_f32("native_trace_01_norm1.f32", normed.data(), normed.size());
+                dump_acoustic_f32("native_trace_02_q_norm.f32", q.data(), q.size());
+                dump_acoustic_f32("native_trace_03_k_norm.f32", new_k.data(), new_k.size());
+                dump_acoustic_f32("native_trace_04_v.f32", new_v.data(), new_v.size());
+            }
+
+            const int new_used = past + S;
+            {
+''',
+    "trace normalized qkv",
+)
+
+replace_once(
+    '''            for (int s = 0; s < S; ++s) {
+                {
+                    ScopedBenchTimer timer(benchmark_enabled, bench.o_proj_ms);
+''',
+    '''            if (trace_initial_prefill && layer == 0) {
+                dump_acoustic_f32("native_trace_05_attention.f32", attn_out.data(), attn_out.size());
+            }
+
+            for (int s = 0; s < S; ++s) {
+                {
+                    ScopedBenchTimer timer(benchmark_enabled, bench.o_proj_ms);
+''',
+    "trace attention output",
+)
+
+replace_once(
+    '''                {
+                    ScopedBenchTimer timer(benchmark_enabled, bench.residual_ms);
+                    for (int i = 0; i < H; ++i) {
+                        x_ptr[i] += down[static_cast<size_t>(i)];
+                    }
+                }
+            }
+        }
+
+        output.resize(static_cast<size_t>(S * H));
+''',
+    '''                {
+                    ScopedBenchTimer timer(benchmark_enabled, bench.residual_ms);
+                    for (int i = 0; i < H; ++i) {
+                        x_ptr[i] += down[static_cast<size_t>(i)];
+                    }
+                }
+            }
+            if (trace_initial_prefill && layer == 0) {
+                dump_acoustic_f32("native_trace_06_norm2.f32", normed.data(), normed.size());
+                dump_acoustic_f32("native_trace_07_x_after_layer.f32", x.data(), x.size());
+            }
+        }
+
+        output.resize(static_cast<size_t>(S * H));
+''',
+    "trace FFN layer output",
+)
+
+replace_once(
     '''        const int initial_positions[2] = {0, 1};
         impl_->cached_step(impl_->token, initial_positions, 2, impl_->hidden);
         std::copy(impl_->hidden.begin(), impl_->hidden.begin() + H, impl_->slot0.begin());
@@ -98,4 +178,4 @@ replace_once(
 )
 
 path.write_text(text, encoding="utf-8")
-print("Instrumented native acoustic initial and incremental hidden-state dumps")
+print("Instrumented native acoustic incremental states and first-prefill sub-stages")
