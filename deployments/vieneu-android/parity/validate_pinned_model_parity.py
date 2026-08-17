@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -15,6 +17,29 @@ def resolve_report(path: Path, alternate_name: str) -> Path:
     raise FileNotFoundError(f"parity report not found: {path} or {alternate}")
 
 
+def run_acoustic_weight_audit(summary_path: Path) -> Path | None:
+    onnx_dir = Path("models/official/onnx_update")
+    native_acoustic = Path("models/pinned/acoustic/vieneu_acoustic_weights.npz")
+    script = Path(__file__).with_name("audit_acoustic_onnx_weights.py")
+    if not onnx_dir.is_dir() or not native_acoustic.is_file() or not script.is_file():
+        return None
+    output = summary_path.parent / "acoustic-onnx-weight-audit.json"
+    subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--onnx-dir",
+            str(onnx_dir),
+            "--native-acoustic",
+            str(native_acoustic),
+            "--output",
+            str(output),
+        ],
+        check=True,
+    )
+    return output
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--same-asset-report", required=True, type=Path)
@@ -24,6 +49,8 @@ def main() -> int:
     parser.add_argument("--max-backbone-max-abs", type=float, default=1.0e-3)
     args = parser.parse_args()
 
+    args.summary.parent.mkdir(parents=True, exist_ok=True)
+    audit_path = run_acoustic_weight_audit(args.summary)
     same_path = resolve_report(args.same_asset_report, "same-asset-report.json")
     acoustic_path = resolve_report(args.acoustic_report, "report.json")
     same = json.loads(same_path.read_text(encoding="utf-8"))
@@ -46,6 +73,7 @@ def main() -> int:
         "inputs": {
             "same_asset_report": str(same_path),
             "acoustic_report": str(acoustic_path),
+            "acoustic_onnx_weight_audit": str(audit_path) if audit_path else None,
         },
         "checks": checks,
         "thresholds": {
@@ -60,7 +88,6 @@ def main() -> int:
             "first_runtime_divergence": same.get("first_runtime_divergence"),
         },
     }
-    args.summary.parent.mkdir(parents=True, exist_ok=True)
     args.summary.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     if not summary["pass"]:
