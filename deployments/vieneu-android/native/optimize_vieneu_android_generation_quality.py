@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-'''Reset VieNeu v3 sampling to the upstream fresh-engine seed per utterance.
+'''Reset VieNeu sampling to upstream seed 42 and log acoustic codebooks.
 
 The upstream sampler starts from mt19937 seed 42. A long-lived Android engine
 otherwise carries RNG state from previous requests, making the same sentence
-produce unrelated lengths. Resetting to 42 preserves upstream sampling behavior
-while making every utterance independent and reproducible.
+produce unrelated lengths. Resetting to 42 preserves fresh-engine behavior.
+Per-frame code logging exposes silence collapse or backend divergence directly.
 '''
 
 import pathlib
@@ -81,4 +81,25 @@ replace_once(
     'reset sampler for each utterance',
 )
 
-print('Applied upstream seed-42 reset for independent utterance sampling')
+replace_once(
+    engine_cpp,
+    '''            if (!acoustic_->generate_frame(synth_h, params.temperature, params.top_k, params.top_p, params.repetition_penalty, history, codes, eos, error)) return false;
+            if (benchmark_enabled) {
+''',
+    '''            if (!acoustic_->generate_frame(synth_h, params.temperature, params.top_k, params.top_p, params.repetition_penalty, history, codes, eos, error)) return false;
+            if (benchmark_enabled && t < 64) {
+                std::cerr << "[V3NativeCodes] frame=" << t
+                          << " eos=" << (eos ? 1 : 0)
+                          << " codes=";
+                for (size_t code_index = 0; code_index < codes.size(); ++code_index) {
+                    if (code_index > 0) std::cerr << ',';
+                    std::cerr << codes[code_index];
+                }
+                std::cerr << "\\n";
+            }
+            if (benchmark_enabled) {
+''',
+    'log acoustic codebooks per frame',
+)
+
+print('Applied upstream seed-42 reset and acoustic codebook diagnostics')
