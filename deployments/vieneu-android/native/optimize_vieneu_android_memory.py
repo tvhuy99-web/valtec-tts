@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-'''Android-only ONNX Runtime memory retention patch.
+'''Android-only ONNX Runtime memory retention and v0.9.2 core patch driver.
 
 The native VieNeu pipeline uses CPU arenas for the speaker encoder and MOSS
 codec. On Android, those arenas retain large workspaces after Run(), causing RSS
@@ -7,17 +7,18 @@ to grow after reference enrollment and again after long codec decodes. ORT 1.24.
 supports per-run CPU arena shrinkage while keeping the arena enabled during the
 inference itself.
 
-This script intentionally patches only the pinned upstream source and fails
-closed when the expected call sites change.
+After the memory edits, this driver applies the versioned persistent speaker
+cache and dialect patch to the same pinned upstream source tree.
 '''
 
 import pathlib
+import runpy
 import sys
 
 if len(sys.argv) != 2:
     raise SystemExit('usage: optimize_vieneu_android_memory.py <vieneu-source-dir>')
 
-root = pathlib.Path(sys.argv[1])
+root = pathlib.Path(sys.argv[1]).resolve()
 codec_path = root / 'src/vieneu/v3_native/v3_native_moss_codec.cpp'
 reference_path = root / 'src/vieneu/v3_native/v3_native_reference.cpp'
 
@@ -77,5 +78,12 @@ reference = replace_once(
 
 codec_path.write_text(codec, encoding='utf-8')
 reference_path.write_text(reference, encoding='utf-8')
-
 print('Applied Android ONNX CPU arena shrinkage to speaker encoder and MOSS codec')
+
+patch = pathlib.Path(__file__).resolve().parent / 'optimize_vieneu_android_v092_source.py'
+saved_argv = sys.argv[:]
+try:
+    sys.argv = [str(patch), str(root)]
+    runpy.run_path(str(patch), run_name='__main__')
+finally:
+    sys.argv = saved_argv
