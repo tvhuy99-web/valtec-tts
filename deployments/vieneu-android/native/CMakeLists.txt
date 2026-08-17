@@ -9,24 +9,12 @@ if(NOT ONNXRUNTIME_ROOT)
     message(FATAL_ERROR "ONNXRUNTIME_ROOT must point to the Android ONNX Runtime C++ SDK")
 endif()
 
-if(NOT VULKAN_HEADERS_ROOT)
-    message(FATAL_ERROR "VULKAN_HEADERS_ROOT must point to a pinned Vulkan-Headers checkout")
+if(NOT OpenCL_INCLUDE_DIR OR NOT EXISTS "${OpenCL_INCLUDE_DIR}/CL/cl.h")
+    message(FATAL_ERROR "OpenCL headers are required for the Android Adreno build")
 endif()
-if(NOT EXISTS "${VULKAN_HEADERS_ROOT}/include/vulkan/vulkan.hpp")
-    message(FATAL_ERROR "Pinned Vulkan-Hpp header is missing: ${VULKAN_HEADERS_ROOT}/include/vulkan/vulkan.hpp")
+if(NOT OpenCL_LIBRARY OR NOT EXISTS "${OpenCL_LIBRARY}")
+    message(FATAL_ERROR "OpenCL link library is required for the Android Adreno build")
 endif()
-
-# ggml-vulkan's cross-compiled runtime also consumes the C++ SPIR-V definitions.
-# Ubuntu installs them as host headers, but the Android toolchain deliberately
-# excludes host include roots. Copy only the versioned SPIR-V subtree into a
-# private build include root rather than exposing all of /usr/include.
-set(VIENEU_HOST_SPIRV_HEADER "/usr/include/spirv/unified1/spirv.hpp")
-if(NOT EXISTS "${VIENEU_HOST_SPIRV_HEADER}")
-    message(FATAL_ERROR "SPIR-V C++ header is missing: ${VIENEU_HOST_SPIRV_HEADER}")
-endif()
-set(VIENEU_SPIRV_INCLUDE_ROOT "${CMAKE_BINARY_DIR}/host-spirv-include")
-file(MAKE_DIRECTORY "${VIENEU_SPIRV_INCLUDE_ROOT}")
-file(COPY "/usr/include/spirv" DESTINATION "${VIENEU_SPIRV_INCLUDE_ROOT}")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -86,50 +74,48 @@ endif()
 message(STATUS "${VIENEU_ANDROID_SHORT_TEXT_STDOUT}")
 
 execute_process(
-    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/optimize_vieneu_android_vulkan_runtime.py" "${VIENEU_SOURCE_DIR}"
-    RESULT_VARIABLE VIENEU_ANDROID_VULKAN_RUNTIME_RESULT
-    OUTPUT_VARIABLE VIENEU_ANDROID_VULKAN_RUNTIME_STDOUT
-    ERROR_VARIABLE VIENEU_ANDROID_VULKAN_RUNTIME_STDERR
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/optimize_vieneu_android_opencl_runtime.py" "${VIENEU_SOURCE_DIR}"
+    RESULT_VARIABLE VIENEU_ANDROID_OPENCL_RUNTIME_RESULT
+    OUTPUT_VARIABLE VIENEU_ANDROID_OPENCL_RUNTIME_STDOUT
+    ERROR_VARIABLE VIENEU_ANDROID_OPENCL_RUNTIME_STDERR
 )
-if(NOT VIENEU_ANDROID_VULKAN_RUNTIME_RESULT EQUAL 0)
-    message(FATAL_ERROR "VieNeu Android Vulkan runtime patch failed:\n${VIENEU_ANDROID_VULKAN_RUNTIME_STDOUT}\n${VIENEU_ANDROID_VULKAN_RUNTIME_STDERR}")
+if(NOT VIENEU_ANDROID_OPENCL_RUNTIME_RESULT EQUAL 0)
+    message(FATAL_ERROR "VieNeu Android OpenCL runtime patch failed:\n${VIENEU_ANDROID_OPENCL_RUNTIME_STDOUT}\n${VIENEU_ANDROID_OPENCL_RUNTIME_STDERR}")
 endif()
-message(STATUS "${VIENEU_ANDROID_VULKAN_RUNTIME_STDOUT}")
+message(STATUS "${VIENEU_ANDROID_OPENCL_RUNTIME_STDOUT}")
 
+# VieNeu upstream does not expose 'opencl' as a VIENEU_NATIVE_BACKEND selector.
+# Keep its portable CPU backend compiled for scheduler glue/unsupported tiny ops,
+# while explicitly enabling llama.cpp's OpenCL backend and placing every semantic
+# backbone layer on OpenCL at runtime. There is no whole-backbone CPU fallback.
 set(VIENEU_PORTABLE_CPU ON CACHE BOOL "" FORCE)
 set(GGML_CPU_ARM_ARCH "armv8.2-a+dotprod+fp16" CACHE STRING "" FORCE)
-set(VIENEU_NATIVE_BACKEND vulkan CACHE STRING "" FORCE)
-set(GGML_VULKAN ON CACHE BOOL "" FORCE)
-set(GGML_VULKAN_DEBUG OFF CACHE BOOL "" FORCE)
-set(GGML_VULKAN_VALIDATE OFF CACHE BOOL "" FORCE)
-set(GGML_VULKAN_CHECK_RESULTS OFF CACHE BOOL "" FORCE)
-set(GGML_VULKAN_RUN_TESTS OFF CACHE BOOL "" FORCE)
+set(VIENEU_NATIVE_BACKEND cpu CACHE STRING "" FORCE)
+set(GGML_OPENCL ON CACHE BOOL "" FORCE)
+set(GGML_OPENCL_EMBED_KERNELS ON CACHE BOOL "" FORCE)
+set(GGML_OPENCL_USE_ADRENO_KERNELS ON CACHE BOOL "" FORCE)
+set(GGML_OPENCL_PROFILING OFF CACHE BOOL "" FORCE)
 set(VIENEU_SEA_G2P OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
 set(GGML_LLAMAFILE OFF CACHE BOOL "" FORCE)
 
-message(STATUS "VieNeu Android Vulkan PoC: compiling ggml-vulkan for arm64-v8a")
+message(STATUS "VieNeu Android OpenCL PoC: compiling ggml-opencl for arm64-v8a with Adreno kernels")
+message(STATUS "OpenCL headers: ${OpenCL_INCLUDE_DIR}")
+message(STATUS "OpenCL link library: ${OpenCL_LIBRARY}")
 add_subdirectory("${VIENEU_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/vieneu-src-build")
 
-if(NOT TARGET ggml-vulkan)
-    message(FATAL_ERROR "GGML Vulkan target was not created")
+if(NOT TARGET ggml-opencl)
+    message(FATAL_ERROR "GGML OpenCL target was not created")
 endif()
-target_include_directories(ggml-vulkan PRIVATE
-    "${VULKAN_HEADERS_ROOT}/include"
-    "${VIENEU_SPIRV_INCLUDE_ROOT}"
-)
-message(STATUS "Using pinned Vulkan-Hpp headers: ${VULKAN_HEADERS_ROOT}/include")
-message(STATUS "Using staged SPIR-V headers: ${VIENEU_SPIRV_INCLUDE_ROOT}")
 
-# The engine patch directly calls the Vulkan registry/probe API before loading
-# llama.cpp. Link and expose the pinned GGML headers explicitly instead of
-# relying on desktop dynamic-backend discovery.
+# The engine patch directly registers the OpenCL backend before loading the
+# llama.cpp backbone, so expose GGML headers and link the backend into VieNeu.
 target_include_directories(vieneu-tts-core PRIVATE
     "${VIENEU_SOURCE_DIR}/third_party/llama.cpp/ggml/include"
 )
-target_link_libraries(vieneu-tts-core PUBLIC ggml-vulkan)
-target_compile_definitions(vieneu-tts-core PRIVATE VIENEU_ANDROID_VULKAN_POC=1)
+target_link_libraries(vieneu-tts-core PUBLIC ggml-opencl)
+target_compile_definitions(vieneu-tts-core PRIVATE VIENEU_ANDROID_OPENCL_POC=1)
 
 add_library(vieneu_jni SHARED vieneu_jni.cpp)
 target_include_directories(vieneu_jni PRIVATE
@@ -139,9 +125,5 @@ target_include_directories(vieneu_jni PRIVATE
 
 find_library(log-lib log)
 find_library(android-lib android)
-find_library(vulkan-lib vulkan)
-if(NOT vulkan-lib)
-    message(FATAL_ERROR "Android system Vulkan loader was not found")
-endif()
 
-target_link_libraries(vieneu_jni PRIVATE vieneu-tts ggml-vulkan ${log-lib} ${android-lib} ${vulkan-lib})
+target_link_libraries(vieneu_jni PRIVATE vieneu-tts ggml-opencl ${log-lib} ${android-lib})
