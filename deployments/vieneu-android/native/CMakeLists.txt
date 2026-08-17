@@ -15,6 +15,12 @@ endif()
 if(NOT OpenCL_LIBRARY OR NOT EXISTS "${OpenCL_LIBRARY}")
     message(FATAL_ERROR "OpenCL link library is required for the Android Adreno build")
 endif()
+if(NOT SEA_G2P_INCLUDE_DIR OR NOT EXISTS "${SEA_G2P_INCLUDE_DIR}/sea_g2p.h")
+    message(FATAL_ERROR "sea-g2p C ABI headers are required for Vietnamese pronunciation")
+endif()
+if(NOT SEA_G2P_LIBRARY OR NOT EXISTS "${SEA_G2P_LIBRARY}")
+    message(FATAL_ERROR "Android sea-g2p shared library is required")
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -48,8 +54,8 @@ if(NOT VIENEU_ANDROID_MEMORY_OPT_RESULT EQUAL 0)
 endif()
 message(STATUS "${VIENEU_ANDROID_MEMORY_OPT_STDOUT}")
 
-# Preserve the quality-oriented acoustic weight formats: QKV/O are FP16, the
-# fused FFN is Q8_0, and final audio/text heads remain F32.
+# Convert acoustic QKV/O-projection weights to FP16 before replacing the CPU
+# graph wrappers with OpenCL-resident buffers.
 execute_process(
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/optimize_vieneu_android_acoustic_f16.py" "${VIENEU_SOURCE_DIR}"
     RESULT_VARIABLE VIENEU_ANDROID_ACOUSTIC_F16_RESULT
@@ -74,6 +80,32 @@ if(NOT VIENEU_ANDROID_ACOUSTIC_OPENCL_RESULT EQUAL 0)
 endif()
 message(STATUS "${VIENEU_ANDROID_ACOUSTIC_OPENCL_STDOUT}")
 
+# Replace the acoustic FFN Q8 weights with FP16. Q8 errors compound across
+# autoregressive frames and caused longer Vietnamese phrases to become gibberish.
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/optimize_vieneu_android_acoustic_quality.py" "${VIENEU_SOURCE_DIR}"
+    RESULT_VARIABLE VIENEU_ANDROID_ACOUSTIC_QUALITY_RESULT
+    OUTPUT_VARIABLE VIENEU_ANDROID_ACOUSTIC_QUALITY_STDOUT
+    ERROR_VARIABLE VIENEU_ANDROID_ACOUSTIC_QUALITY_STDERR
+)
+if(NOT VIENEU_ANDROID_ACOUSTIC_QUALITY_RESULT EQUAL 0)
+    message(FATAL_ERROR "VieNeu Android acoustic quality patch failed:\n${VIENEU_ANDROID_ACOUSTIC_QUALITY_STDOUT}\n${VIENEU_ANDROID_ACOUSTIC_QUALITY_STDERR}")
+endif()
+message(STATUS "${VIENEU_ANDROID_ACOUSTIC_QUALITY_STDOUT}")
+
+# Reset the random sampler from a stable prompt hash for each utterance so the
+# same sentence no longer produces unrelated lengths based on prior requests.
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/optimize_vieneu_android_generation_quality.py" "${VIENEU_SOURCE_DIR}"
+    RESULT_VARIABLE VIENEU_ANDROID_GENERATION_QUALITY_RESULT
+    OUTPUT_VARIABLE VIENEU_ANDROID_GENERATION_QUALITY_STDOUT
+    ERROR_VARIABLE VIENEU_ANDROID_GENERATION_QUALITY_STDERR
+)
+if(NOT VIENEU_ANDROID_GENERATION_QUALITY_RESULT EQUAL 0)
+    message(FATAL_ERROR "VieNeu Android generation quality patch failed:\n${VIENEU_ANDROID_GENERATION_QUALITY_STDOUT}\n${VIENEU_ANDROID_GENERATION_QUALITY_STDERR}")
+endif()
+message(STATUS "${VIENEU_ANDROID_GENERATION_QUALITY_STDOUT}")
+
 execute_process(
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/optimize_vieneu_android_short_text.py" "${CMAKE_CURRENT_LIST_DIR}/vieneu_jni.cpp"
     RESULT_VARIABLE VIENEU_ANDROID_SHORT_TEXT_RESULT
@@ -81,7 +113,7 @@ execute_process(
     ERROR_VARIABLE VIENEU_ANDROID_SHORT_TEXT_STDERR
 )
 if(NOT VIENEU_ANDROID_SHORT_TEXT_RESULT EQUAL 0)
-    message(FATAL_ERROR "VieNeu Android short-text patch failed:\n${VIENEU_ANDROID_SHORT_TEXT_STDOUT}\n${VIENEU_ANDROID_SHORT_TEXT_STDERR}")
+    message(FATAL_ERROR "VieNeu Android generation policy patch failed:\n${VIENEU_ANDROID_SHORT_TEXT_STDOUT}\n${VIENEU_ANDROID_SHORT_TEXT_STDERR}")
 endif()
 message(STATUS "${VIENEU_ANDROID_SHORT_TEXT_STDOUT}")
 
@@ -96,7 +128,7 @@ if(NOT VIENEU_ANDROID_OPENCL_RUNTIME_RESULT EQUAL 0)
 endif()
 message(STATUS "${VIENEU_ANDROID_OPENCL_RUNTIME_STDOUT}")
 
-# Fix the pinned llama.cpp kernel for Qualcomm drivers that expose only the
+# Fix every embedded kernel for Qualcomm drivers that expose only the
 # cl_qcom_subgroup_shuffle builtin names.
 execute_process(
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/patch_llama_opencl_qcom_shuffle.py" "${VIENEU_SOURCE_DIR}"
@@ -120,29 +152,39 @@ set(GGML_OPENCL ON CACHE BOOL "" FORCE)
 set(GGML_OPENCL_EMBED_KERNELS ON CACHE BOOL "" FORCE)
 set(GGML_OPENCL_USE_ADRENO_KERNELS ON CACHE BOOL "" FORCE)
 set(GGML_OPENCL_PROFILING OFF CACHE BOOL "" FORCE)
+# sea-g2p is cross-compiled explicitly by CI and linked below. Leave the
+# upstream host-Cargo build disabled because it cannot target Android correctly.
 set(VIENEU_SEA_G2P OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
 set(GGML_LLAMAFILE OFF CACHE BOOL "" FORCE)
 
-message(STATUS "VieNeu Android OpenCL: semantic backbone and acoustic hot paths on Adreno")
+message(STATUS "VieNeu Android OpenCL: semantic backbone and FP16 acoustic hot paths on Adreno")
 message(STATUS "OpenCL headers: ${OpenCL_INCLUDE_DIR}")
 message(STATUS "OpenCL link library: ${OpenCL_LIBRARY}")
+message(STATUS "sea-g2p Android library: ${SEA_G2P_LIBRARY}")
 add_subdirectory("${VIENEU_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/vieneu-src-build")
 
 if(NOT TARGET ggml-opencl)
     message(FATAL_ERROR "GGML OpenCL target was not created")
 endif()
 
-# Runtime patches directly call the OpenCL backend API before model loading and
-# from the acoustic engine, so expose GGML headers and link ggml-opencl into core.
+add_library(vieneu-sea-g2p-android SHARED IMPORTED GLOBAL)
+set_target_properties(vieneu-sea-g2p-android PROPERTIES
+    IMPORTED_LOCATION "${SEA_G2P_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES "${SEA_G2P_INCLUDE_DIR}"
+)
+
+# Runtime patches directly call the OpenCL backend API and native sea-g2p.
 target_include_directories(vieneu-tts-core PRIVATE
     "${VIENEU_SOURCE_DIR}/third_party/llama.cpp/ggml/include"
+    "${SEA_G2P_INCLUDE_DIR}"
 )
-target_link_libraries(vieneu-tts-core PUBLIC ggml-opencl)
+target_link_libraries(vieneu-tts-core PUBLIC ggml-opencl vieneu-sea-g2p-android)
 target_compile_definitions(vieneu-tts-core PRIVATE
     VIENEU_ANDROID_OPENCL_POC=1
     VIENEU_ANDROID_ACOUSTIC_OPENCL=1
+    VIENEU_USE_SEA_G2P=1
 )
 
 add_library(vieneu_jni SHARED vieneu_jni.cpp)
