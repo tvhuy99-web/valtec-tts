@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-'''Install the bundled sea-g2p dictionary and stamp the Android quality build.'''
+'''Install the bundled sea-g2p dictionary in the Android model directory.'''
 
 import pathlib
 import sys
@@ -43,22 +43,19 @@ new = '''    fun modelDir(context: Context): File {
     }
 '''
 
-count = text.count(old)
-if count != 1:
-    raise RuntimeError(f'ModelManager.modelDir anchor: expected one match, found {count}')
-path.write_text(text.replace(old, new, 1), encoding='utf-8')
+if new in text:
+    print('Android sea-g2p dictionary install is already patched')
+else:
+    count = text.count(old)
+    if count != 1:
+        raise RuntimeError(
+            f'ModelManager.modelDir anchor: expected one match, found {count}'
+        )
+    path.write_text(text.replace(old, new, 1), encoding='utf-8')
+    print('Patched Android sea-g2p dictionary install')
 
+# Versioning is owned by app/build.gradle.kts. Do not rewrite it here: this
+# build-time asset patch used to pin an obsolete version and broke newer builds.
 gradle = app / 'build.gradle.kts'
-gradle_text = gradle.read_text(encoding='utf-8')
-version_old = '''        versionCode = 14
-        versionName = "0.6.0-opencl-quality"
-'''
-version_new = '''        versionCode = 17
-        versionName = "0.8.0-opencl-f32-reference-window"
-'''
-version_count = gradle_text.count(version_old)
-if version_count != 1:
-    raise RuntimeError(f'Android version anchor: expected one match, found {version_count}')
-gradle.write_text(gradle_text.replace(version_old, version_new, 1), encoding='utf-8')
-
-print('Patched Android sea-g2p dictionary install and stamped full-F32 quality build v17')
+if not gradle.is_file():
+    raise RuntimeError(f'Missing Android Gradle file: {gradle}')
