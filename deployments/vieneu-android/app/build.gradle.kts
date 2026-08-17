@@ -28,8 +28,8 @@ android {
         applicationId = "com.vieneu.voiceclone"
         minSdk = 28
         targetSdk = 34
-        versionCode = 6
-        versionName = "0.2.4-perf2"
+        versionCode = 7
+        versionName = "0.2.5-perf2fix"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
