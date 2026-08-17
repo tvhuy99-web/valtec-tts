@@ -18,6 +18,7 @@ from pathlib import Path
 
 import numpy as np
 import safetensors.torch
+import sentencepiece as spm
 import torch
 
 
@@ -59,6 +60,53 @@ def copy_tokenizer_files(source_dirs: list[Path], output_dir: Path) -> None:
         tokenizer_config.write_text(
             json.dumps({"tokenizer_class": "PreTrainedTokenizerFast"}, indent=2) + "\n",
             encoding="utf-8",
+        )
+
+
+def create_loader_only_sentencepiece(output_dir: Path, vocab_size: int) -> None:
+    """Create a GGUF loader vocabulary; VieNeu never asks llama.cpp to tokenize.
+
+    The semantic backbone is driven exclusively through llama_batch.embd. The
+    actual VieNeu tokenizer remains tokenizer.json and runs in VieNeu code. A
+    deterministic SentencePiece model is therefore safe here and avoids making
+    llama.cpp guess an unknown custom pre-tokenizer.
+    """
+    target = output_dir / "tokenizer.model"
+    if target.exists():
+        return
+    corpus = output_dir / "loader_vocab_corpus.txt"
+    alphabet = "".join(chr(0x4E00 + i) for i in range(256))
+    lines = []
+    for shift in range(256):
+        rotated = alphabet[shift:] + alphabet[:shift]
+        lines.append(rotated)
+        lines.append(rotated[::2] + rotated[1::2])
+    corpus.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    prefix = output_dir / "loader_tokenizer"
+    spm.SentencePieceTrainer.train(
+        input=str(corpus),
+        model_prefix=str(prefix),
+        vocab_size=vocab_size,
+        model_type="bpe",
+        character_coverage=1.0,
+        hard_vocab_limit=True,
+        bos_id=-1,
+        eos_id=-1,
+        pad_id=-1,
+        unk_id=0,
+        normalization_rule_name="identity",
+        split_by_whitespace=False,
+        remove_extra_whitespaces=False,
+        shuffle_input_sentence=False,
+        input_sentence_size=0,
+    )
+    shutil.move(str(prefix) + ".model", target)
+    Path(str(prefix) + ".vocab").unlink(missing_ok=True)
+    corpus.unlink(missing_ok=True)
+    processor = spm.SentencePieceProcessor(model_file=str(target))
+    if processor.get_piece_size() != vocab_size:
+        raise ValueError(
+            f"loader-only SentencePiece vocab mismatch: {processor.get_piece_size()} != {vocab_size}"
         )
 
 
@@ -208,6 +256,7 @@ def main() -> int:
         metadata={"format": "pt", "source_revision": args.source_revision},
     )
     copy_tokenizer_files(list(args.tokenizer_dir) + [args.config.parent], output_hf)
+    create_loader_only_sentencepiece(output_hf, vocab_size)
     save_heads(sd, args.output_heads, n_vq)
     acoustic_layers = save_acoustic(sd, args.output_acoustic)
 
@@ -223,6 +272,7 @@ def main() -> int:
         "acoustic_file": str(args.output_acoustic),
         "acoustic_layers": acoustic_layers,
         "n_vq": n_vq,
+        "gguf_vocab": "loader-only-sentencepiece-external-embeddings",
     }
     args.metadata.parent.mkdir(parents=True, exist_ok=True)
     args.metadata.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
