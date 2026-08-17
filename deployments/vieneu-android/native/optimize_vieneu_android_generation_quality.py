@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-'''Make VieNeu v3 sampling deterministic per utterance and independently reproducible.
+'''Reset VieNeu v3 sampling to the upstream fresh-engine seed per utterance.
 
-The upstream sampler owns one long-lived mt19937. Every generation consumes its
-state, so the same sentence can terminate after 64 frames or wander for 191
-frames depending on what was synthesized before it. Resetting from a stable hash
-of the phoneme prompt makes output, EOS behavior and performance repeatable.
+The upstream sampler starts from mt19937 seed 42. A long-lived Android engine
+otherwise carries RNG state from previous requests, making the same sentence
+produce unrelated lengths. Resetting to 42 preserves upstream sampling behavior
+while making every utterance independent and reproducible.
 '''
 
 import pathlib
@@ -62,39 +62,18 @@ int64_t V3NativeSampler::sample_logits(
 
 replace_once(
     engine_cpp,
-    '''bool contains_v3_emotion_token(const std::string& text) {
-''',
-    '''uint32_t stable_utterance_seed(const std::string& phonemes, int style_token_id) {
-    // FNV-1a gives a small deterministic seed without depending on the unstable
-    // implementation-defined result of std::hash across platforms/builds.
-    uint32_t hash = 2166136261u;
-    for (unsigned char c : phonemes) {
-        hash ^= static_cast<uint32_t>(c);
-        hash *= 16777619u;
-    }
-    hash ^= static_cast<uint32_t>(style_token_id);
-    hash *= 16777619u;
-    return hash == 0u ? 42u : hash;
-}
-
-bool contains_v3_emotion_token(const std::string& text) {
-''',
-    'stable utterance seed helper',
-)
-
-replace_once(
-    engine_cpp,
     '''    std::lock_guard<std::mutex> lock(run_mutex_);
     try {
         std::vector<float> synth_h;
 ''',
     '''    std::lock_guard<std::mutex> lock(run_mutex_);
     try {
-        const uint32_t sampling_seed = stable_utterance_seed(phonemes, style_token_id);
+        constexpr uint32_t sampling_seed = 42u;
         sampler_.reset_seed(sampling_seed);
         if (benchmark_enabled) {
             std::cerr << "[V3NativeDiag] stage=sampling.reset"
                       << " seed=" << sampling_seed
+                      << " mode=fresh_engine_default"
                       << " phoneme_bytes=" << phonemes.size() << "\\n";
         }
         std::vector<float> synth_h;
@@ -102,4 +81,4 @@ replace_once(
     'reset sampler for each utterance',
 )
 
-print('Applied deterministic per-utterance acoustic sampling seed')
+print('Applied upstream seed-42 reset for independent utterance sampling')
