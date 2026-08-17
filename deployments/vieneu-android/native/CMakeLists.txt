@@ -41,6 +41,20 @@ if(NOT VIENEU_ANDROID_MEMORY_OPT_RESULT EQUAL 0)
 endif()
 message(STATUS "${VIENEU_ANDROID_MEMORY_OPT_STDOUT}")
 
+# QKV and O-projection dominate the measured acoustic cached-step on Android.
+# Quantize only these internal projections to Q8_0 so GGML can use ARM dotprod.
+# Keep audio/text heads F32 so final sampling logits are not quantized.
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/optimize_vieneu_android_acoustic_q8.py" "${VIENEU_SOURCE_DIR}"
+    RESULT_VARIABLE VIENEU_ANDROID_ACOUSTIC_Q8_RESULT
+    OUTPUT_VARIABLE VIENEU_ANDROID_ACOUSTIC_Q8_STDOUT
+    ERROR_VARIABLE VIENEU_ANDROID_ACOUSTIC_Q8_STDERR
+)
+if(NOT VIENEU_ANDROID_ACOUSTIC_Q8_RESULT EQUAL 0)
+    message(FATAL_ERROR "VieNeu Android acoustic Q8 patch failed:\n${VIENEU_ANDROID_ACOUSTIC_Q8_STDOUT}\n${VIENEU_ANDROID_ACOUSTIC_Q8_STDERR}")
+endif()
+message(STATUS "${VIENEU_ANDROID_ACOUSTIC_Q8_STDOUT}")
+
 # Keep a known Android ABI baseline while enabling the ARMv8.2 dot-product and
 # FP16 vector instructions that are available on the profiled SM7675 device.
 # This avoids cross-compiling with -mcpu=native while allowing GGML's Q8 path to
