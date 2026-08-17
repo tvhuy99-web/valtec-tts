@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-"""Repackage VieNeu's semantic backbone as a standard Qwen3 HF checkpoint.
+"""Build one internally consistent VieNeu native model core from one checkpoint.
 
-The upstream native exporter writes GGUF metadata manually. This script first
-builds a canonical Hugging Face Qwen3 checkpoint so llama.cpp's maintained
-convert_hf_to_gguf.py owns all tensor-name and architecture metadata decisions.
-It also exports the VieNeu embedding/head NPZ from the exact same safetensors.
+The semantic backbone is first repackaged as a canonical Hugging Face Qwen3
+checkpoint so llama.cpp's maintained converter owns all GGUF metadata and tensor
+layout decisions. Heads and acoustic weights are extracted from the very same
+safetensors file, preventing mixed-checkpoint native packages.
 """
 from __future__ import annotations
 
 import argparse
+import io
 import json
+import re
 import shutil
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -22,6 +25,15 @@ def require(sd: dict[str, torch.Tensor], key: str) -> torch.Tensor:
     if key not in sd:
         raise KeyError(f"missing checkpoint tensor: {key}")
     return sd[key].detach().cpu().float().contiguous()
+
+
+def require_suffix(sd: dict[str, torch.Tensor], suffix: str) -> torch.Tensor:
+    if suffix in sd:
+        return require(sd, suffix)
+    matches = [key for key in sd if key.endswith(suffix)]
+    if len(matches) != 1:
+        raise KeyError(f"expected one tensor ending with {suffix!r}, found {matches}")
+    return require(sd, matches[0])
 
 
 def copy_tokenizer_files(source_dirs: list[Path], output_dir: Path) -> None:
@@ -50,28 +62,70 @@ def copy_tokenizer_files(source_dirs: list[Path], output_dir: Path) -> None:
         )
 
 
+def save_npz_stored(path: Path, arrays: dict[str, np.ndarray]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, mode="w", compression=zipfile.ZIP_STORED, allowZip64=True) as archive:
+        for name, array in arrays.items():
+            buffer = io.BytesIO()
+            np.save(buffer, np.ascontiguousarray(array), allow_pickle=False)
+            archive.writestr(f"{name}.npy", buffer.getvalue())
+
+
 def save_heads(sd: dict[str, torch.Tensor], output_path: Path, n_vq: int) -> None:
-    text_emb = require(sd, "text_embeddings.weight").numpy()
+    text_emb = require_suffix(sd, "text_embeddings.weight").numpy()
     audio_emb = np.stack(
-        [require(sd, f"audio_embeddings.{channel}.weight").numpy() for channel in range(n_vq)],
+        [require_suffix(sd, f"audio_embeddings.{channel}.weight").numpy() for channel in range(n_vq)],
         axis=0,
     )
-    payload: dict[str, np.ndarray] = {
-        "text_emb": text_emb,
-        "audio_emb": audio_emb,
-    }
+    payload: dict[str, np.ndarray] = {"text_emb": text_emb, "audio_emb": audio_emb}
     optional = {
         "xvec_w": "xvec_proj.0.weight",
         "xvec_b": "xvec_proj.0.bias",
         "xvec_ln_w": "xvec_proj.1.weight",
         "xvec_ln_b": "xvec_proj.1.bias",
     }
-    for out_name, source_name in optional.items():
-        if source_name in sd:
-            payload[out_name] = require(sd, source_name).numpy()
+    for output_name, suffix in optional.items():
+        matches = [key for key in sd if key == suffix or key.endswith(suffix)]
+        if len(matches) == 1:
+            payload[output_name] = require(sd, matches[0]).numpy()
     payload["xvec_ln_eps"] = np.asarray([1.0e-5], dtype=np.float32)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(output_path, **payload)
+    save_npz_stored(output_path, payload)
+
+
+def save_acoustic(sd: dict[str, torch.Tensor], output_path: Path) -> int:
+    layer_pattern = re.compile(r"(?:^|\.)acoustic_decoder\.layers\.(\d+)\.norm1\.weight$")
+    layer_ids = sorted(
+        {
+            int(match.group(1))
+            for key in sd
+            if (match := layer_pattern.search(key)) is not None
+        }
+    )
+    if not layer_ids or layer_ids != list(range(layer_ids[-1] + 1)):
+        raise ValueError(f"invalid acoustic layer sequence detected: {layer_ids}")
+
+    arrays: dict[str, np.ndarray] = {
+        "slot_pos_emb": require_suffix(sd, "acoustic_decoder.slot_pos_emb.weight").numpy(),
+        "norm": require_suffix(sd, "acoustic_decoder.norm.weight").numpy(),
+    }
+    for layer in layer_ids:
+        source = f"acoustic_decoder.layers.{layer}"
+        output = f"layers.{layer}."
+        mappings = {
+            "norm1": "norm1.weight",
+            "attn.qkv": "attn.qkv.weight",
+            "attn.q_norm": "attn.q_norm.weight",
+            "attn.k_norm": "attn.k_norm.weight",
+            "attn.o_proj": "attn.o_proj.weight",
+            "norm2": "norm2.weight",
+            "ff_up": "ff_up.weight",
+            "ff_gate": "ff_gate.weight",
+            "ff_down": "ff_down.weight",
+        }
+        for output_name, source_name in mappings.items():
+            arrays[output + output_name] = require_suffix(sd, f"{source}.{source_name}").numpy()
+    save_npz_stored(output_path, arrays)
+    return len(layer_ids)
 
 
 def main() -> int:
@@ -81,6 +135,7 @@ def main() -> int:
     parser.add_argument("--tokenizer-dir", action="append", default=[], type=Path)
     parser.add_argument("--output-hf-dir", required=True, type=Path)
     parser.add_argument("--output-heads", required=True, type=Path)
+    parser.add_argument("--output-acoustic", required=True, type=Path)
     parser.add_argument("--metadata", required=True, type=Path)
     parser.add_argument("--source-revision", required=True)
     args = parser.parse_args()
@@ -97,31 +152,31 @@ def main() -> int:
     if hidden <= 0 or layers <= 0 or heads <= 0 or kv_heads <= 0 or hidden % heads:
         raise ValueError("invalid Qwen3 architecture values in VieNeu config")
 
-    text_emb = require(sd, "text_embeddings.weight")
+    text_emb = require_suffix(sd, "text_embeddings.weight")
     vocab_size = int(text_emb.shape[0])
     if int(text_emb.shape[1]) != hidden:
         raise ValueError(f"text embedding hidden mismatch: {tuple(text_emb.shape)} vs hidden={hidden}")
 
     mapped: dict[str, torch.Tensor] = {
         "model.embed_tokens.weight": text_emb,
-        "model.norm.weight": require(sd, "semantic_backbone.norm.weight"),
+        "model.norm.weight": require_suffix(sd, "semantic_backbone.norm.weight"),
         "lm_head.weight": text_emb.clone(),
     }
     for layer in range(layers):
-        src = f"semantic_backbone.layers.{layer}"
-        dst = f"model.layers.{layer}"
-        mapped[f"{dst}.input_layernorm.weight"] = require(sd, f"{src}.input_layernorm.weight")
-        mapped[f"{dst}.post_attention_layernorm.weight"] = require(sd, f"{src}.post_attention_layernorm.weight")
+        source = f"semantic_backbone.layers.{layer}"
+        output = f"model.layers.{layer}"
+        mapped[f"{output}.input_layernorm.weight"] = require_suffix(sd, f"{source}.input_layernorm.weight")
+        mapped[f"{output}.post_attention_layernorm.weight"] = require_suffix(sd, f"{source}.post_attention_layernorm.weight")
         for name in ("q_proj", "k_proj", "v_proj", "o_proj", "q_norm", "k_norm"):
-            mapped[f"{dst}.self_attn.{name}.weight"] = require(sd, f"{src}.self_attn.{name}.weight")
+            mapped[f"{output}.self_attn.{name}.weight"] = require_suffix(sd, f"{source}.self_attn.{name}.weight")
         for name in ("gate_proj", "up_proj", "down_proj"):
-            mapped[f"{dst}.mlp.{name}.weight"] = require(sd, f"{src}.mlp.{name}.weight")
+            mapped[f"{output}.mlp.{name}.weight"] = require_suffix(sd, f"{source}.mlp.{name}.weight")
 
-    out = args.output_hf_dir
-    if out.exists():
-        shutil.rmtree(out)
-    out.mkdir(parents=True)
-    qwen_cfg = {
+    output_hf = args.output_hf_dir
+    if output_hf.exists():
+        shutil.rmtree(output_hf)
+    output_hf.mkdir(parents=True)
+    qwen_config = {
         "architectures": ["Qwen3ForCausalLM"],
         "model_type": "qwen3",
         "vocab_size": vocab_size,
@@ -143,26 +198,45 @@ def main() -> int:
         "bos_token_id": cfg.get("bos_token_id"),
         "eos_token_id": cfg.get("eos_token_id"),
     }
-    (out / "config.json").write_text(json.dumps(qwen_cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    safetensors.torch.save_file(mapped, str(out / "model.safetensors"), metadata={"format": "pt"})
-    copy_tokenizer_files(list(args.tokenizer_dir) + [args.config.parent], out)
+    (output_hf / "config.json").write_text(
+        json.dumps(qwen_config, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    safetensors.torch.save_file(
+        mapped,
+        str(output_hf / "model.safetensors"),
+        metadata={"format": "pt", "source_revision": args.source_revision},
+    )
+    copy_tokenizer_files(list(args.tokenizer_dir) + [args.config.parent], output_hf)
     save_heads(sd, args.output_heads, n_vq)
+    acoustic_layers = save_acoustic(sd, args.output_acoustic)
 
-    tensor_shapes = {name: list(tensor.shape) for name, tensor in mapped.items()}
     metadata = {
         "schema": 1,
         "source_revision": args.source_revision,
         "source_safetensors": str(args.safetensors),
         "source_config": str(args.config),
-        "architecture": qwen_cfg,
+        "architecture": qwen_config,
         "mapped_tensor_count": len(mapped),
-        "mapped_tensor_shapes": tensor_shapes,
+        "mapped_tensor_shapes": {name: list(tensor.shape) for name, tensor in mapped.items()},
         "heads_file": str(args.output_heads),
+        "acoustic_file": str(args.output_acoustic),
+        "acoustic_layers": acoustic_layers,
         "n_vq": n_vq,
     }
     args.metadata.parent.mkdir(parents=True, exist_ok=True)
     args.metadata.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({"output": str(out), "mapped_tensors": len(mapped), "vocab": vocab_size, "layers": layers}))
+    print(
+        json.dumps(
+            {
+                "output": str(output_hf),
+                "mapped_tensors": len(mapped),
+                "vocab": vocab_size,
+                "backbone_layers": layers,
+                "acoustic_layers": acoustic_layers,
+            }
+        )
+    )
     return 0
 
 
