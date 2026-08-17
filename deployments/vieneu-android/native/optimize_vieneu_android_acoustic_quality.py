@@ -1,67 +1,37 @@
 #!/usr/bin/env python3
-'''Use full-F32 weights for every VieNeu acoustic hot-path graph on OpenCL.
+"""Fail closed unless the complete acoustic hot path is upstream CPU/F32.
 
-FP16 made the Android implementation fast, but the submitted v16 waveform still
-mispronounced the beginning of a six-word Vietnamese sentence. This diagnostic
-quality build keeps QKV, O-projection, FFN and output heads on the Adreno OpenCL
-backend while retaining the original F32 model weights. No CPU fallback is
-introduced. The result establishes whether FP16 numerical drift is responsible
-for the remaining pronunciation errors.
-'''
+This is the final guard after the legacy Android acoustic optimization hooks.
+Those hooks are now validators only. Any future reintroduction of FP16, Q8 or a
+custom OpenCL acoustic graph must be explicit and accompanied by parity tests.
+"""
 
-import pathlib
+from pathlib import Path
 import sys
 
 if len(sys.argv) != 2:
-    raise SystemExit('usage: optimize_vieneu_android_acoustic_quality.py <vieneu-source-dir>')
+    raise SystemExit("usage: optimize_vieneu_android_acoustic_quality.py <vieneu-source-dir>")
 
-root = pathlib.Path(sys.argv[1])
-path = root / 'src/vieneu/v3_native/v3_native_acoustic_ggml.cpp'
-text = path.read_text(encoding='utf-8')
-
-
-def replace_once(old: str, new: str, label: str) -> None:
-    global text
-    count = text.count(old)
-    if count != 1:
-        raise RuntimeError(f'{label}: expected exactly one match, found {count}')
-    text = text.replace(old, new, 1)
-
-
-# The earlier Android patch passes allow_f16=true for QKV and O-projection.
-# Preserve that call ABI but force the OpenCL tensor type back to F32.
-replace_once(
-    '''        use_f16_ = allow_f16;
-        const ggml_type weight_type = use_f16_ ? GGML_TYPE_F16 : GGML_TYPE_F32;
-''',
-    '''        (void)allow_f16;
-        use_f16_ = false;
-        const ggml_type weight_type = GGML_TYPE_F32;
-''',
-    'force F32 acoustic linear weights',
+path = Path(sys.argv[1]) / "src/vieneu/v3_native/v3_native_acoustic_ggml.cpp"
+text = path.read_text(encoding="utf-8")
+required = (
+    "weight_ = ggml_new_tensor_2d(ctx_, GGML_TYPE_F32",
+    "gate_weight_ = ggml_new_tensor_2d(ctx_, GGML_TYPE_F32",
+    "up_weight_ = ggml_new_tensor_2d(ctx_, GGML_TYPE_F32",
+    "down_weight_ = ggml_new_tensor_2d(ctx_, GGML_TYPE_F32",
+    "backend = ggml_backend_cpu_init();",
 )
-
-# Disable FFN quantization/conversion and upload the original F32 arrays.
-replace_once(
-    '''        use_q8_ = env_flag_enabled("VIENEU_ACOUSTIC_Q8_FFN", true);
-        const int64_t q8_block = ggml_blck_size(GGML_TYPE_Q8_0);
-        if (use_q8_ && (hidden_dim_ % q8_block != 0 || intermediate_dim_ % q8_block != 0)) {
-            use_q8_ = false;
-        }
-
-        const ggml_type weight_type = use_q8_ ? GGML_TYPE_Q8_0 : GGML_TYPE_F32;
-''',
-    '''        use_q8_ = false;
-        const ggml_type weight_type = GGML_TYPE_F32;
-''',
-    'select F32 acoustic FFN weights',
+forbidden = (
+    "GGML_TYPE_Q8_0",
+    "ggml_fp32_to_fp16_row",
+    "ggml_backend_opencl_init()",
+    "OpenCL acoustic",
 )
+missing = [item for item in required if item not in text]
+found = [item for item in forbidden if item in text]
+if missing or found:
+    raise RuntimeError(
+        f"full acoustic parity verification failed: missing={missing}, forbidden={found}"
+    )
 
-replace_once(
-    ''' backend=OpenCL qkv=F16 o_proj=F16 ffn=Q8_0 heads=F32 cpu_fallback=0''',
-    ''' backend=OpenCL qkv=F32 o_proj=F32 ffn=F32 heads=F32 cpu_fallback=0''',
-    'full-F32 quality diagnostics mode',
-)
-
-path.write_text(text, encoding='utf-8')
-print('Applied full-F32 acoustic weights on OpenCL; CPU fallback remains disabled')
+print("Parity mode: full acoustic attention/FFN/heads/EOS path verified CPU F32")
