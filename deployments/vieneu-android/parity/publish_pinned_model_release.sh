@@ -13,10 +13,6 @@ if [[ ! -f "$MODEL_ROOT/model-manifest.json" ]]; then
   echo "Refusing to publish: model manifest is missing." >&2
   exit 1
 fi
-if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-  echo "Refusing to overwrite immutable release $TAG" >&2
-  exit 1
-fi
 
 ASSET_DIR="${RUNNER_TEMP:-/tmp}/vieneu-model-release-assets"
 rm -rf "$ASSET_DIR"
@@ -52,6 +48,25 @@ import json, sys
 print(json.load(open(sys.argv[1], encoding="utf-8"))["source_revision"])
 PY
 )"
+
+if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+  EXISTING_DIR="${RUNNER_TEMP:-/tmp}/vieneu-existing-release"
+  rm -rf "$EXISTING_DIR"
+  mkdir -p "$EXISTING_DIR"
+  gh release download "$TAG" \
+    --repo "$GITHUB_REPOSITORY" \
+    --pattern model-manifest.json \
+    --dir "$EXISTING_DIR"
+  EXISTING_SHA="$(sha256sum "$EXISTING_DIR/model-manifest.json" | awk '{print $1}')"
+  if [[ "$EXISTING_SHA" != "$MANIFEST_SHA" ]]; then
+    echo "Immutable release $TAG exists with a different manifest: $EXISTING_SHA != $MANIFEST_SHA" >&2
+    exit 1
+  fi
+  echo "MODEL_RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
+  echo "MODEL_MANIFEST_SHA256=$MANIFEST_SHA" >> "$GITHUB_ENV"
+  echo "Immutable release $TAG already exists and matches manifest $MANIFEST_SHA"
+  exit 0
+fi
 
 NOTES="${RUNNER_TEMP:-/tmp}/vieneu-model-release-notes.md"
 cat > "$NOTES" <<EOF
