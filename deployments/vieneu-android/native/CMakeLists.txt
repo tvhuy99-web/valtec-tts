@@ -9,6 +9,13 @@ if(NOT ONNXRUNTIME_ROOT)
     message(FATAL_ERROR "ONNXRUNTIME_ROOT must point to the Android ONNX Runtime C++ SDK")
 endif()
 
+if(NOT VULKAN_HEADERS_ROOT)
+    message(FATAL_ERROR "VULKAN_HEADERS_ROOT must point to a pinned Vulkan-Headers checkout")
+endif()
+if(NOT EXISTS "${VULKAN_HEADERS_ROOT}/include/vulkan/vulkan.hpp")
+    message(FATAL_ERROR "Pinned Vulkan-Hpp header is missing: ${VULKAN_HEADERS_ROOT}/include/vulkan/vulkan.hpp")
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
@@ -81,6 +88,12 @@ set(GGML_LLAMAFILE OFF CACHE BOOL "" FORCE)
 
 message(STATUS "VieNeu Android Vulkan PoC: compiling ggml-vulkan for arm64-v8a")
 add_subdirectory("${VIENEU_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/vieneu-src-build")
+
+if(NOT TARGET ggml-vulkan)
+    message(FATAL_ERROR "GGML Vulkan target was not created")
+endif()
+target_include_directories(ggml-vulkan PRIVATE "${VULKAN_HEADERS_ROOT}/include")
+message(STATUS "Using pinned Vulkan-Hpp headers: ${VULKAN_HEADERS_ROOT}/include")
 
 add_library(vieneu_jni SHARED vieneu_jni.cpp)
 target_include_directories(vieneu_jni PRIVATE
