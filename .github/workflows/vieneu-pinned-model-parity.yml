@@ -95,13 +95,16 @@ jobs:
           CFG="$(find models/official -type f -path '*/update/config.json' | head -n 1)"
           if [ -z "$CFG" ]; then CFG="$(find models/official -type f -name 'config.json' | head -n 1)"; fi
           TOK="$(find models/official -type f -name 'tokenizer.json' | head -n 1)"
+          VOICES="$(find models/official -type f -name 'voices_v3_turbo.json' | head -n 1)"
           test -s "$SAFE"
           test -s "$CFG"
           test -s "$TOK"
+          test -s "$VOICES"
           echo "OFFICIAL_SAFE=$SAFE" >> "$GITHUB_ENV"
           echo "OFFICIAL_CFG=$CFG" >> "$GITHUB_ENV"
           echo "OFFICIAL_TOK_DIR=$(dirname "$TOK")" >> "$GITHUB_ENV"
-          sha256sum "$SAFE" "$CFG" "$TOK" | tee evidence/official-inputs.sha256
+          echo "OFFICIAL_VOICES=$VOICES" >> "$GITHUB_ENV"
+          sha256sum "$SAFE" "$CFG" "$TOK" "$VOICES" | tee evidence/official-inputs.sha256
 
       - name: Export one-checkpoint backbone heads and acoustic weights
         shell: bash
@@ -121,6 +124,7 @@ jobs:
 
           cp "$OFFICIAL_CFG" models/pinned/config.json
           cp "$OFFICIAL_TOK_DIR/tokenizer.json" models/pinned/tokenizer.json
+          cp "$OFFICIAL_VOICES" models/pinned/voices_v3_turbo.json
 
           python upstream-cpp/third_party/llama.cpp/convert_hf_to_gguf.py \
             build/qwen3-hf \
@@ -229,11 +233,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY' >> "$GITHUB_ENV"
+          PARITY_VOICE="$(python - <<'PY'
           import json
           data = json.load(open('models/pinned/voices_v3_turbo.json', encoding='utf-8'))
-          print('PARITY_VOICE=' + (data.get('default_voice') or next(iter(data['presets']))))
+          print(data.get('default_voice') or next(iter(data['presets'])))
           PY
+          )"
+          test -n "$PARITY_VOICE"
+          echo "Parity voice: $PARITY_VOICE"
           CLI="$(find native-build -type f -name 'vieneu-tts-cli' -perm -111 | head -n 1)"
           test -n "$CLI"
           export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/onnxruntime-sdk/lib:$(dirname "$CLI"):${LD_LIBRARY_PATH:-}"
