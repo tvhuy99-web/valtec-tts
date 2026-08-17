@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-'''Backport Qualcomm subgroup shuffle aliases across all embedded OpenCL kernels.
+'''Backport Qualcomm subgroup aliases and apply final Android diagnostics.
 
 Adreno 732 exposes cl_qcom_subgroup_shuffle but not the KHR builtin names. The
 previous patch covered only one flash-attention source, while another embedded
 kernel still failed to compile. Patch every .cl source that calls
-sub_group_shuffle_xor and lacks the Qualcomm alias.
+sub_group_shuffle_xor and lacks the Qualcomm alias. This is the last source
+patch invoked by Android CMake, so it also applies diagnostics after all
+performance transformations are complete.
 '''
 
 import pathlib
+import subprocess
 import sys
 
 if len(sys.argv) != 2:
@@ -35,9 +38,6 @@ for path in sorted(kernels.rglob('*.cl')):
     if 'qcom_sub_group_shuffle_xor((val), (mask)' in text:
         continue
 
-    # Put the compatibility preamble before kernel code. It is safe whether or
-    # not the source already enables the KHR extension: the guard activates only
-    # on Qualcomm-only drivers.
     insertion = 0
     if text.startswith('#pragma OPENCL EXTENSION cl_khr_fp16 : enable'):
         insertion = text.find('\n') + 1
@@ -49,3 +49,15 @@ if not patched:
     raise RuntimeError('No unpatched sub_group_shuffle_xor OpenCL kernels were found')
 
 print('Patched Qualcomm subgroup shuffle aliases in: ' + ', '.join(patched))
+
+scripts_dir = pathlib.Path(__file__).resolve().parent
+for script_name in (
+    'instrument_vieneu_deep_diagnostics.py',
+    'fix_vieneu_deep_diagnostics_config.py',
+    'instrument_vieneu_reference_diagnostics.py',
+):
+    subprocess.run(
+        [sys.executable, str(scripts_dir / script_name), str(root)],
+        check=True,
+    )
+print('Applied final deep synthesis, backbone, acoustic, fbank, and speaker diagnostics')
