@@ -115,12 +115,12 @@ cpp = replace_once(
         if (diag) {
             std::cout << "[V3NativeDiag] stage=reference.cache_hit wall_ms=0"
                       << " speaker_values=" << speaker_emb.size()
-                      << " code_values=" << ref_codes.size() << "\n";
+                      << " code_values=" << ref_codes.size() << "\\n";
         }
         return true;
     }
     if (diag) {
-        std::cout << "[V3NativeDiag] stage=reference.cache_miss wall_ms=0\n";
+        std::cout << "[V3NativeDiag] stage=reference.cache_miss wall_ms=0\\n";
     }
 
     V3NativeWaveform wav;
@@ -203,7 +203,7 @@ backbone_cpp = replace_once(
                   << " n_ctx=" << ctx_params.n_ctx
                   << " n_batch=" << ctx_params.n_batch
                   << " n_ubatch=" << ctx_params.n_ubatch
-                  << " n_outputs_max=" << ctx_params.n_outputs_max << "\n";
+                  << " n_outputs_max=" << ctx_params.n_outputs_max << std::endl;
     }
 ''',
     'bounded llama output and batch buffers',
@@ -220,7 +220,7 @@ backbone_cpp = replace_once(
         std::cout << "[V3NativeDiag] stage=backbone.prefill_meta"
                   << " tokens=" << n_tokens
                   << " context_capacity=" << prefill_capacity_
-                  << " chunk_tokens=128\n";
+                  << " chunk_tokens=128" << std::endl;
     }
 ''',
     'backbone prefill diagnostics',
@@ -280,7 +280,7 @@ backbone_cpp = replace_once(
         if (diag) {
             std::cout << "[V3NativeDiag] stage=backbone.prefill_chunk"
                       << " start=" << chunk_start
-                      << " tokens=" << chunk_tokens << "\n";
+                      << " tokens=" << chunk_tokens << std::endl;
         }
 
         const int res = llama_decode(ctx_, prefill_batch_);
