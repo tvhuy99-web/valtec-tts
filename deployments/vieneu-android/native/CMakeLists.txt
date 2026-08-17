@@ -27,6 +27,20 @@ if(NOT VIENEU_ANDROID_OPT_RESULT EQUAL 0)
 endif()
 message(STATUS "${VIENEU_ANDROID_OPT_STDOUT}")
 
+# Keep ORT's CPU arena enabled during inference for speed, but request shrinkage
+# after the speaker-encoder and MOSS codec runs so large mobile workspaces are
+# not retained for the lifetime of the process.
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/optimize_vieneu_android_memory.py" "${VIENEU_SOURCE_DIR}"
+    RESULT_VARIABLE VIENEU_ANDROID_MEMORY_OPT_RESULT
+    OUTPUT_VARIABLE VIENEU_ANDROID_MEMORY_OPT_STDOUT
+    ERROR_VARIABLE VIENEU_ANDROID_MEMORY_OPT_STDERR
+)
+if(NOT VIENEU_ANDROID_MEMORY_OPT_RESULT EQUAL 0)
+    message(FATAL_ERROR "VieNeu Android memory patch failed:\n${VIENEU_ANDROID_MEMORY_OPT_STDOUT}\n${VIENEU_ANDROID_MEMORY_OPT_STDERR}")
+endif()
+message(STATUS "${VIENEU_ANDROID_MEMORY_OPT_STDOUT}")
+
 # Keep a known Android ABI baseline while enabling the ARMv8.2 dot-product and
 # FP16 vector instructions that are available on the profiled SM7675 device.
 # This avoids cross-compiling with -mcpu=native while allowing GGML's Q8 path to
