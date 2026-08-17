@@ -81,6 +81,13 @@ reference_path.write_text(reference, encoding='utf-8')
 print('Applied Android ONNX CPU arena shrinkage to speaker encoder and MOSS codec')
 
 patch = pathlib.Path(__file__).resolve().parent / 'optimize_vieneu_android_v092_source.py'
+patch_text = patch.read_text(encoding='utf-8')
+old_regex = 'updated, count = re.subn(pattern, replacement, text, count=1, flags=re.DOTALL)'
+new_regex = 'updated, count = re.subn(pattern, lambda _match: replacement, text, count=1, flags=re.DOTALL)'
+if patch_text.count(old_regex) != 1:
+    raise RuntimeError('0.9.2 source patch regex helper shape changed')
+patch.write_text(patch_text.replace(old_regex, new_regex, 1), encoding='utf-8')
+
 saved_argv = sys.argv[:]
 try:
     sys.argv = [str(patch), str(root)]
