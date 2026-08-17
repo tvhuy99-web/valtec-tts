@@ -70,12 +70,17 @@ bool contains_v3_emotion_token(const std::string& text) {
     'Vulkan registration and diagnostics helper',
 )
 
+# Diagnostics instrumentation runs before this patch and inserts a stage timer
+# between model_dir_ assignment and assets_.load. Anchor to that final source
+# shape so the patch fails closed if instrumentation changes again.
 replace_once(
     '''        model_dir_ = init.model_dir;
+        auto t_stage = std::chrono::high_resolution_clock::now();
         if (!assets_.load(init.model_dir, error)) return false;
 ''',
     '''        model_dir_ = init.model_dir;
         const int vulkan_device_count = register_and_probe_android_vulkan();
+        auto t_stage = std::chrono::high_resolution_clock::now();
         if (!assets_.load(init.model_dir, error)) return false;
 ''',
     'probe Vulkan before model initialization',
@@ -84,6 +89,7 @@ replace_once(
 replace_once(
     '''        backbone_params.n_threads = init.n_threads;
         backbone_params.n_threads_batch = init.n_threads;
+        t_stage = std::chrono::high_resolution_clock::now();
         if (!backbone_.initialize(backbone_params)) {
 ''',
     '''        backbone_params.n_threads = init.n_threads;
@@ -95,6 +101,7 @@ replace_once(
         std::cerr << "[V3NativeDiag] stage=vulkan.backbone_offload"
                   << " enabled=" << (backbone_params.n_gpu_layers > 0 ? 1 : 0)
                   << " requested_layers=" << backbone_params.n_gpu_layers << "\\n";
+        t_stage = std::chrono::high_resolution_clock::now();
         if (!backbone_.initialize(backbone_params)) {
 ''',
     'enable Vulkan backbone offload',
