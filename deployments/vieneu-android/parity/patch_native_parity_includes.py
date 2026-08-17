@@ -25,9 +25,10 @@ path.write_text(text.replace(old, new, 1), encoding="utf-8")
 for script_name in (
     "patch_native_acoustic_internal_dump.py",
     "patch_native_acoustic_trace_once.py",
+    "patch_native_exact_output_heads.py",
 ):
     subprocess.run(
         [sys.executable, str(pathlib.Path(__file__).with_name(script_name)), str(root)],
         check=True,
     )
-print("Added parity diagnostics and preserved the first acoustic frame trace")
+print("Added parity diagnostics, preserved frame zero, and enabled exact output heads")
