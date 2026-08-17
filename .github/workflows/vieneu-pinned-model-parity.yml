@@ -10,7 +10,7 @@ on:
       - 'deployments/vieneu-android/parity/**'
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   CPP_COMMIT: 838979faf0354ffb3dff898e30b709f644fa7db4
@@ -71,6 +71,17 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
+
+      - name: Publish immutable parity-approved model release
+        if: steps.parity.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          bash deployments/vieneu-android/parity/publish_pinned_model_release.sh \
+            vieneu-model-parity-75ff82a7 \
+            models/pinned \
+            evidence
 
       - name: Reject model when parity is not proven
         if: steps.parity.outcome != 'success'
