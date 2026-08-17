@@ -21,7 +21,7 @@ def replace_once(old: str, new: str, label: str) -> None:
 
 replace_once(
     '''#include <fstream>\n#include <stdexcept>\n''',
-    '''#include <fstream>\n#include <iomanip>\n#include <iostream>\n#include <limits>\n#include <sstream>\n#include <stdexcept>\n''',
+    '''#include <cstdlib>\n#include <fstream>\n#include <iomanip>\n#include <iostream>\n#include <limits>\n#include <sstream>\n#include <stdexcept>\n''',
     "reference diagnostic includes",
 )
 
@@ -71,6 +71,27 @@ std::string reference_diag_summary(const std::vector<float>& values, size_t prev
     return out.str();
 }
 
+void reference_diag_dump(const char* filename, const std::vector<float>& values) {
+    const char* directory = std::getenv("VIENEU_REFERENCE_DIAG_DIR");
+    if (!directory || !*directory || !filename || !*filename) return;
+    std::string path(directory);
+    if (!path.empty() && path.back() != '/' && path.back() != '\\') path.push_back('/');
+    path += filename;
+    std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+    if (!stream.good()) {
+        std::cerr << "[V3NativeRefDeep] dump_failed path=\"" << path << "\"\n";
+        return;
+    }
+    if (!values.empty()) {
+        stream.write(
+            reinterpret_cast<const char*>(values.data()),
+            static_cast<std::streamsize>(values.size() * sizeof(float)));
+    }
+    stream.close();
+    std::cerr << "[V3NativeRefDeep] dump path=\"" << path << "\" bytes="
+              << values.size() * sizeof(float) << "\n";
+}
+
 double hz_to_mel(double hz) {
 ''',
     "reference diagnostic helpers",
@@ -83,6 +104,7 @@ replace_once(
               << " output_rate=" << kSpeakerRate
               << " input=" << reference_diag_summary(mono, 4)
               << " output=" << reference_diag_summary(wav, 4) << "\n";
+    reference_diag_dump("native_reference_resampled.f32", wav);
     if (wav.size() < kFrameLength) {
 ''',
     "reference resample summary",
@@ -101,6 +123,7 @@ replace_once(
               << " frame_shift=" << kFrameShift
               << " fft=" << kFftSize
               << " " << reference_diag_summary(features) << "\n";
+    reference_diag_dump("native_reference_fbank.f32", features);
     return features;
 }
 ''',
@@ -114,10 +137,11 @@ replace_once(
                   << " output_shape=";
         for (int64_t dim : info.GetShape()) std::cerr << dim << 'x';
         std::cerr << " " << reference_diag_summary(out_embedding) << "\n";
+        reference_diag_dump("native_reference_speaker_embedding.f32", out_embedding);
         if (out_embedding.size() == 192) return true;
 ''',
     "speaker encoder output summary",
 )
 
 path.write_text(text, encoding="utf-8")
-print("Instrumented native reference fbank and speaker encoder diagnostics")
+print("Instrumented and enabled raw dumps for native reference fbank and speaker encoder diagnostics")
