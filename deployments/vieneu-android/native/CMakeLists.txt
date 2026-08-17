@@ -172,6 +172,10 @@ endif()
 add_library(vieneu-sea-g2p-android SHARED IMPORTED GLOBAL)
 set_target_properties(vieneu-sea-g2p-android PROPERTIES
     IMPORTED_LOCATION "${SEA_G2P_LIBRARY}"
+    # Rust's Android cdylib has no DT_SONAME by default. Tell CMake to link it
+    # with -lsea_g2p_rs instead of embedding the absolute CI workspace path in
+    # DT_NEEDED, which Android's linker namespace cannot resolve.
+    IMPORTED_NO_SONAME TRUE
     INTERFACE_INCLUDE_DIRECTORIES "${SEA_G2P_INCLUDE_DIR}"
 )
 
@@ -197,3 +201,16 @@ find_library(log-lib log)
 find_library(android-lib android)
 
 target_link_libraries(vieneu_jni PRIVATE vieneu-tts ggml-opencl ${log-lib} ${android-lib})
+
+if(NOT CMAKE_READELF)
+    find_program(CMAKE_READELF NAMES llvm-readelf readelf REQUIRED)
+endif()
+add_custom_command(TARGET vieneu_jni POST_BUILD
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_LIST_DIR}/verify_android_elf_needed.py"
+            "${CMAKE_READELF}"
+            "$<TARGET_FILE:vieneu-tts>"
+            "$<TARGET_FILE:vieneu_jni>"
+    COMMENT "Verifying portable Android DT_NEEDED library names"
+    VERBATIM
+)
