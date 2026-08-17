@@ -22,6 +22,8 @@ jobs:
       NDK_VERSION: 29.0.14206865
       ORT_VERSION: 1.24.3
       VIENEU_COMMIT: 838979faf0354ffb3dff898e30b709f644fa7db4
+      VULKAN_HEADERS_TAG: vulkan-sdk-1.3.275.0
+      VULKAN_HEADERS_COMMIT: 217e93c664ec6704ec2d8c36fa116c1a4a1e2d40
       EXPECTED_SIGNING_SHA256: FE:68:B5:9D:82:7C:1E:C0:6D:81:21:61:42:47:6B:12:62:45:56:35:DE:72:5D:5C:0E:47:53:FD:4A:3A:97:1D
       EXPECTED_DEBUG_PACKAGE: com.vieneu.voiceclone.debug
 
@@ -70,8 +72,10 @@ jobs:
           glslc --version
           test -f /usr/share/cmake/SPIRV-Headers/SPIRV-HeadersConfig.cmake
 
-      - name: Clone pinned VieNeu-TTS.cpp
+      - name: Clone pinned VieNeu-TTS.cpp and Vulkan-Headers
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p .build
           git clone --depth 1 https://github.com/dduongtrandai/VieNeu-TTS.cpp.git .build/vieneu-src
           git -C .build/vieneu-src fetch --depth 1 origin "${VIENEU_COMMIT}"
@@ -81,6 +85,12 @@ jobs:
           test "$(git -C .build/vieneu-src rev-parse HEAD)" = "${VIENEU_COMMIT}"
           git -C .build/vieneu-src rev-parse HEAD
           git -C .build/vieneu-src submodule status --recursive
+
+          git clone --depth 1 --branch "${VULKAN_HEADERS_TAG}" \
+            https://github.com/KhronosGroup/Vulkan-Headers.git .build/Vulkan-Headers
+          test "$(git -C .build/Vulkan-Headers rev-parse HEAD)" = "${VULKAN_HEADERS_COMMIT}"
+          test -f .build/Vulkan-Headers/include/vulkan/vulkan.hpp
+          git -C .build/Vulkan-Headers rev-parse HEAD
 
       - name: Instrument VieNeu core diagnostics
         run: |
@@ -110,6 +120,7 @@ jobs:
           VULKAN_INCLUDE="${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include"
           test -f "$VULKAN_LIB"
           test -f "$VULKAN_INCLUDE/vulkan/vulkan.h"
+          test -f "${GITHUB_WORKSPACE}/.build/Vulkan-Headers/include/vulkan/vulkan.hpp"
 
           cmake -S deployments/vieneu-android/native -B .build/vieneu-android-native -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK}/build/cmake/android.toolchain.cmake" \
@@ -121,6 +132,7 @@ jobs:
             -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH \
             -DVIENEU_SOURCE_DIR="${GITHUB_WORKSPACE}/.build/vieneu-src" \
             -DONNXRUNTIME_ROOT="${GITHUB_WORKSPACE}/.build/ort-sdk" \
+            -DVULKAN_HEADERS_ROOT="${GITHUB_WORKSPACE}/.build/Vulkan-Headers" \
             -DVIENEU_PORTABLE_CPU=ON \
             -DVIENEU_NATIVE_BACKEND=vulkan \
             -DVIENEU_SEA_G2P=OFF \
