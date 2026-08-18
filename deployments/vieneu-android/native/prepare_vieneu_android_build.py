@@ -163,7 +163,7 @@ def main() -> None:
 
     run_script(native_dir / "optimize_vieneu_android_opencl_runtime.py", str(source))
     run_script(native_dir / "patch_llama_opencl_qcom_shuffle.py", str(source))
-    run_script(native_dir / "optimize_vieneu_android_cache_v3.py", str(source), str(android_root))
+    run_script(native_dir / "optimize_vieneu_android_cache_v4.py", str(source), str(android_root))
     run_script(native_dir / "finalize_vieneu_android_direct_wav.py", str(android_root))
     run_script(native_dir / "finalize_vieneu_android_app.py", str(android_root))
 
@@ -270,7 +270,7 @@ def main() -> None:
         "android_patch_sha256": sha256_bytes(android_patch),
         "android_patch_bytes": len(android_patch),
         "android_changed_files": android_files,
-        "reference_cache": "content-addressed-v3",
+        "reference_cache": "content-addressed-v4",
         "acoustic_runtime": "opencl-f32-canonical",
         "audio_transport": "native-wav-pcm16",
         "java_audio_buffer_bytes": 0,

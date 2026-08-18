@@ -163,6 +163,89 @@ std::vector<float> v3_resample_sinc(
         output[static_cast<size_t>(n)] = static_cast<float>(sum);
     }
     return output;
+}
+
+static size_t v3_fft_factor(size_t n) {
+    for (size_t factor = 2; factor * factor <= n; ++factor) {
+        if (n % factor == 0) return factor;
+    }
+    return n;
+}
+
+static void v3_fft(std::vector<std::complex<double>>& values, bool inverse) {
+    const size_t n = values.size();
+    if (n <= 1) return;
+    const size_t factor = v3_fft_factor(n);
+    const double sign = inverse ? 1.0 : -1.0;
+    if (factor == n) {
+        std::vector<std::complex<double>> output(n);
+        for (size_t k = 0; k < n; ++k) {
+            std::complex<double> sum(0.0, 0.0);
+            for (size_t j = 0; j < n; ++j) {
+                const double angle = sign * 2.0 * kPi *
+                    static_cast<double>(j * k) / static_cast<double>(n);
+                sum += values[j] * std::complex<double>(std::cos(angle), std::sin(angle));
+            }
+            output[k] = sum;
+        }
+        values.swap(output);
+        return;
+    }
+
+    const size_t width = n / factor;
+    std::vector<std::vector<std::complex<double>>> parts(
+        factor, std::vector<std::complex<double>>(width));
+    for (size_t r = 0; r < factor; ++r) {
+        for (size_t j = 0; j < width; ++j) {
+            parts[r][j] = values[j * factor + r];
+        }
+        v3_fft(parts[r], inverse);
+    }
+
+    std::vector<std::complex<double>> output(n);
+    for (size_t k = 0; k < n; ++k) {
+        std::complex<double> sum(0.0, 0.0);
+        for (size_t r = 0; r < factor; ++r) {
+            const double angle = sign * 2.0 * kPi *
+                static_cast<double>(r * k) / static_cast<double>(n);
+            sum += parts[r][k % width] *
+                std::complex<double>(std::cos(angle), std::sin(angle));
+        }
+        output[k] = sum;
+    }
+    values.swap(output);
+}
+
+static int64_t v3_reflect_index(int64_t index, int64_t length) {
+    if (length <= 1) return 0;
+    while (index < 0 || index >= length) {
+        if (index < 0) index = -index;
+        if (index >= length) index = 2 * length - 2 - index;
+    }
+    return index;
+}
+
+static std::vector<double> v3_irfft(
+        const std::vector<std::complex<double>>& half,
+        int fft_size) {
+    const int bins = fft_size / 2 + 1;
+    if (static_cast<int>(half.size()) != bins) return {};
+    std::vector<std::complex<double>> spectrum(static_cast<size_t>(fft_size));
+    spectrum[0] = std::complex<double>(half[0].real(), 0.0);
+    for (int k = 1; k < fft_size / 2; ++k) {
+        spectrum[static_cast<size_t>(k)] = half[static_cast<size_t>(k)];
+        spectrum[static_cast<size_t>(fft_size - k)] =
+            std::conj(half[static_cast<size_t>(k)]);
+    }
+    spectrum[static_cast<size_t>(fft_size / 2)] =
+        std::complex<double>(half[static_cast<size_t>(fft_size / 2)].real(), 0.0);
+    v3_fft(spectrum, true);
+    std::vector<double> output(static_cast<size_t>(fft_size));
+    const double scale = 1.0 / static_cast<double>(fft_size);
+    for (int i = 0; i < fft_size; ++i) {
+        output[static_cast<size_t>(i)] = spectrum[static_cast<size_t>(i)].real() * scale;
+    }
+    return output;
 }'''
 
 regex_once(
@@ -186,10 +269,285 @@ replace_once(
     'reference code resampler parity',
 )
 
+denoiser = r'''bool V3NativeDenoiser::denoise(
+        const V3NativeWaveform& input,
+        V3NativeWaveform& output,
+        std::string& warning) {
+    output = V3NativeWaveform{};
+    warning.clear();
+    if (!session_) {
+        warning = "Native denoiser session is not initialized.";
+        return false;
+    }
+    if (input.sample_rate <= 0 || input.mono.empty()) {
+        warning = "Reference audio is empty or has an invalid sample rate.";
+        return false;
+    }
+
+    try {
+        constexpr int kDenoiseRate = 44100;
+        constexpr int kDenoiseFft = 1680;
+        constexpr int kDenoiseHop = 420;
+        constexpr int kDenoisePad = 840;
+        constexpr int kDenoiseBins = 841;
+        constexpr size_t kDenoiseTailPad = 441;
+
+        std::vector<float> wav = input.sample_rate == kDenoiseRate
+            ? input.mono
+            : v3_resample_sinc(
+                input.mono,
+                input.sample_rate,
+                kDenoiseRate,
+                64,
+                0.95,
+                true,
+                14.769656459379492);
+        if (wav.empty()) {
+            warning = "Reference denoiser resampling failed.";
+            return false;
+        }
+
+        const size_t output_length = wav.size();
+        double abs_max = 1.0e-7;
+        for (float value : wav) {
+            if (!std::isfinite(value)) {
+                warning = "Reference audio contains non-finite samples.";
+                return false;
+            }
+            abs_max = (std::max)(abs_max, std::fabs(static_cast<double>(value)));
+        }
+
+        std::vector<double> normalized(output_length + kDenoiseTailPad, 0.0);
+        for (size_t i = 0; i < output_length; ++i) {
+            normalized[i] = static_cast<double>(wav[i]) / abs_max;
+        }
+        double inner_max = 0.0;
+        for (double value : normalized) inner_max = (std::max)(inner_max, std::fabs(value));
+        const double inner_scale = inner_max + 1.0e-7;
+        for (double& value : normalized) value /= inner_scale;
+
+        const size_t frames = normalized.size() / static_cast<size_t>(kDenoiseHop);
+        if (frames == 0) {
+            warning = "Reference audio is too short for denoiser STFT.";
+            return false;
+        }
+
+        std::vector<double> window(static_cast<size_t>(kDenoiseFft));
+        for (int i = 0; i < kDenoiseFft; ++i) {
+            window[static_cast<size_t>(i)] =
+                0.5 - 0.5 * std::cos(2.0 * kPi * static_cast<double>(i) /
+                                     static_cast<double>(kDenoiseFft));
+        }
+
+        const size_t spectral_values =
+            static_cast<size_t>(kDenoiseBins) * frames;
+        std::vector<float> mag(spectral_values);
+        std::vector<float> cos_phase(spectral_values);
+        std::vector<float> sin_phase(spectral_values);
+        std::vector<std::complex<double>> fft_frame(static_cast<size_t>(kDenoiseFft));
+
+        for (size_t frame = 0; frame < frames; ++frame) {
+            const int64_t start =
+                static_cast<int64_t>(frame * static_cast<size_t>(kDenoiseHop)) -
+                static_cast<int64_t>(kDenoisePad);
+            for (int i = 0; i < kDenoiseFft; ++i) {
+                const int64_t source_index = v3_reflect_index(
+                    start + static_cast<int64_t>(i),
+                    static_cast<int64_t>(normalized.size()));
+                fft_frame[static_cast<size_t>(i)] =
+                    std::complex<double>(
+                        normalized[static_cast<size_t>(source_index)] *
+                            window[static_cast<size_t>(i)],
+                        0.0);
+            }
+            v3_fft(fft_frame, false);
+            for (int bin = 0; bin < kDenoiseBins; ++bin) {
+                const std::complex<double>& value =
+                    fft_frame[static_cast<size_t>(bin)];
+                const double magnitude = std::abs(value);
+                const size_t index =
+                    static_cast<size_t>(bin) * frames + frame;
+                mag[index] = static_cast<float>(magnitude);
+                if (magnitude > 0.0) {
+                    cos_phase[index] =
+                        static_cast<float>(value.real() / magnitude);
+                    sin_phase[index] =
+                        static_cast<float>(value.imag() / magnitude);
+                } else {
+                    cos_phase[index] = 1.0f;
+                    sin_phase[index] = 0.0f;
+                }
+            }
+        }
+
+        Ort::MemoryInfo memory =
+            Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+        std::vector<int64_t> shape = {
+            1,
+            kDenoiseBins,
+            static_cast<int64_t>(frames),
+        };
+
+        const auto input_names = session_input_names(*session_);
+        const auto output_names = session_output_names(*session_);
+        if (input_names.size() != 3 || output_names.size() != 3) {
+            warning = "Reference denoiser ONNX graph must expose three inputs and three outputs.";
+            return false;
+        }
+
+        std::vector<Ort::Value> inputs;
+        inputs.reserve(input_names.size());
+        for (const std::string& name : input_names) {
+            float* data = nullptr;
+            if (name == "mag") data = mag.data();
+            else if (name == "cos") data = cos_phase.data();
+            else if (name == "sin") data = sin_phase.data();
+            else {
+                warning = "Reference denoiser ONNX input names do not match VieNeu v3 Turbo.";
+                return false;
+            }
+            inputs.emplace_back(Ort::Value::CreateTensor<float>(
+                memory,
+                data,
+                spectral_values,
+                shape.data(),
+                shape.size()));
+        }
+
+        const auto input_ptrs = ptrs(input_names);
+        const auto output_ptrs = ptrs(output_names);
+        Ort::RunOptions run_options;
+        run_options.AddConfigEntry("memory.enable_memory_arena_shrinkage", "cpu:0");
+        auto outputs = session_->Run(
+            run_options,
+            input_ptrs.data(),
+            inputs.data(),
+            inputs.size(),
+            output_ptrs.data(),
+            output_ptrs.size());
+
+        const float* sep_mag = nullptr;
+        const float* sep_cos = nullptr;
+        const float* sep_sin = nullptr;
+        for (size_t i = 0; i < output_names.size(); ++i) {
+            const auto info = outputs[i].GetTensorTypeAndShapeInfo();
+            size_t count = 1;
+            for (int64_t dim : info.GetShape()) {
+                if (dim <= 0) {
+                    warning = "Reference denoiser returned an invalid tensor shape.";
+                    return false;
+                }
+                count *= static_cast<size_t>(dim);
+            }
+            if (count != spectral_values) {
+                warning = "Reference denoiser returned an unexpected tensor size.";
+                return false;
+            }
+            const float* data = outputs[i].GetTensorData<float>();
+            if (output_names[i] == "sep_mag") sep_mag = data;
+            else if (output_names[i] == "sep_cos") sep_cos = data;
+            else if (output_names[i] == "sep_sin") sep_sin = data;
+            else {
+                warning = "Reference denoiser ONNX output names do not match VieNeu v3 Turbo.";
+                return false;
+            }
+        }
+        if (!sep_mag || !sep_cos || !sep_sin) {
+            warning = "Reference denoiser ONNX outputs are incomplete.";
+            return false;
+        }
+
+        const size_t synthesis_frames = frames + 1;
+        const size_t signal_length =
+            static_cast<size_t>(kDenoiseFft) +
+            static_cast<size_t>(kDenoiseHop) * (synthesis_frames - 1);
+        std::vector<double> signal(signal_length, 0.0);
+        std::vector<double> window_sum(signal_length, 0.0);
+        std::vector<std::complex<double>> half(
+            static_cast<size_t>(kDenoiseBins));
+
+        for (size_t frame = 0; frame < synthesis_frames; ++frame) {
+            const size_t source_frame =
+                frame < frames ? frame : frames - 1;
+            for (int bin = 0; bin < kDenoiseBins; ++bin) {
+                const size_t index =
+                    static_cast<size_t>(bin) * frames + source_frame;
+                const double magnitude = static_cast<double>(sep_mag[index]);
+                half[static_cast<size_t>(bin)] =
+                    magnitude * std::complex<double>(
+                        static_cast<double>(sep_cos[index]),
+                        static_cast<double>(sep_sin[index]));
+            }
+            const std::vector<double> time_frame =
+                v3_irfft(half, kDenoiseFft);
+            if (time_frame.size() != static_cast<size_t>(kDenoiseFft)) {
+                warning = "Reference denoiser iSTFT failed.";
+                return false;
+            }
+            const size_t offset =
+                frame * static_cast<size_t>(kDenoiseHop);
+            for (int i = 0; i < kDenoiseFft; ++i) {
+                const double w = window[static_cast<size_t>(i)];
+                signal[offset + static_cast<size_t>(i)] +=
+                    time_frame[static_cast<size_t>(i)] * w;
+                window_sum[offset + static_cast<size_t>(i)] += w * w;
+            }
+        }
+
+        for (size_t i = 0; i < signal.size(); ++i) {
+            signal[i] /= (std::max)(window_sum[i], 1.0e-11);
+        }
+
+        if (signal_length <= static_cast<size_t>(2 * kDenoisePad)) {
+            warning = "Reference denoiser iSTFT output is too short.";
+            return false;
+        }
+        const size_t centered_length =
+            signal_length - static_cast<size_t>(2 * kDenoisePad);
+        output.sample_rate = kDenoiseRate;
+        output.mono.assign(output_length, 0.0f);
+        const size_t copy_length = (std::min)(output_length, centered_length);
+        for (size_t i = 0; i < copy_length; ++i) {
+            const double value =
+                signal[static_cast<size_t>(kDenoisePad) + i] * abs_max;
+            if (!std::isfinite(value)) {
+                output = V3NativeWaveform{};
+                warning = "Reference denoiser produced non-finite samples.";
+                return false;
+            }
+            output.mono[i] = static_cast<float>(value);
+        }
+        return true;
+    } catch (const std::exception& e) {
+        output = V3NativeWaveform{};
+        warning = std::string("Reference denoiser failed: ") + e.what();
+        return false;
+    }
+}'''
+
+regex_once(
+    reference_cpp,
+    r'''bool V3NativeDenoiser::denoise\(const V3NativeWaveform& input, V3NativeWaveform& output, std::string& warning\) \{.*?\n\}''',
+    denoiser,
+    'native denoiser parity implementation',
+)
+
 for path, fragments in {
     reference_h: ('v3_resample_sinc(',),
-    reference_cpp: ('std::gcd(input_rate, output_rate)', 'kSpeakerRate, 64, 0.95, true, 14.769656459379492'),
-    engine_cpp: ('sample_rate(), 6, 0.99, false, 0.0', 'sampler_.reset_seed(sampling_seed)'),
+    reference_cpp: (
+        'std::gcd(input_rate, output_rate)',
+        'kSpeakerRate, 64, 0.95, true, 14.769656459379492',
+        'kDenoiseFft = 1680',
+        'kDenoiseHop = 420',
+        'kDenoiseTailPad = 441',
+        'memory.enable_memory_arena_shrinkage',
+        'sep_mag',
+        'v3_irfft(',
+    ),
+    engine_cpp: (
+        'sample_rate(), 6, 0.99, false, 0.0',
+        'sampler_.reset_seed(sampling_seed)',
+    ),
 }.items():
     text = path.read_text(encoding='utf-8')
     missing = [fragment for fragment in fragments if fragment not in text]
@@ -200,4 +558,13 @@ for path in (reference_h, reference_cpp, engine_cpp):
     if 'v3_resample_linear' in path.read_text(encoding='utf-8'):
         raise RuntimeError(f'{path}: linear resampling remains')
 
-print('Applied generation quality, strict completion and reference resampling parity')
+reference_text = reference_cpp.read_text(encoding='utf-8')
+forbidden_reference = (
+    'STFT/iSTFT denoiser path is not enabled yet',
+    'using raw reference audio',
+)
+found = [fragment for fragment in forbidden_reference if fragment in reference_text]
+if found:
+    raise RuntimeError(f'{reference_cpp}: stale denoiser fallback remains {found}')
+
+print('Applied generation quality, strict completion, sinc resampling and native reference denoiser parity')
