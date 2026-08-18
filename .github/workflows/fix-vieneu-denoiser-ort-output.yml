@@ -1,9 +1,9 @@
 name: Fix VieNeu Denoiser ORT Output
 
 on:
-  pull_request:
+  push:
     branches:
-      - dev
+      - agent/reference-quality-v4-build
     paths:
       - '.github/workflows/fix-vieneu-denoiser-ort-output.yml'
 
