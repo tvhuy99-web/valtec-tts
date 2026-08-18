@@ -27,6 +27,7 @@ class VieNeuTtsService : TextToSpeechService() {
 
     override fun onDestroy() {
         stopEpoch.incrementAndGet()
+        runCatching { VieNeuNative.cancel() }
         warmExecutor.shutdownNow()
         super.onDestroy()
     }
@@ -49,8 +50,12 @@ class VieNeuTtsService : TextToSpeechService() {
         onIsLanguageAvailable(lang, country, variant)
 
     override fun onStop() {
-        stopEpoch.incrementAndGet()
-        Diagnostics.log("system_tts", "system_tts.stop_requested")
+        val epoch = stopEpoch.incrementAndGet()
+        runCatching { VieNeuNative.cancel() }
+            .onFailure {
+                Diagnostics.error("system_tts", "system_tts.cancel_native.failure", it)
+            }
+        Diagnostics.log("system_tts", "system_tts.stop_requested", data = mapOf("stop_epoch" to epoch))
     }
 
     override fun onSynthesizeText(request: SynthesisRequest, callback: SynthesisCallback) {
@@ -186,6 +191,17 @@ class VieNeuTtsService : TextToSpeechService() {
                 )
             }
         } catch (t: Throwable) {
+            val cancelled = stopEpoch.get() != epoch ||
+                (t.message?.contains("VIENEU_CANCELLED", ignoreCase = true) == true)
+            if (cancelled) {
+                totalSpan.end(false, mapOf("cancelled" to true))
+                Diagnostics.log(
+                    "system_tts",
+                    "system_tts.synthesis.cancelled",
+                    data = mapOf("synthesis_id" to synthesisId),
+                )
+                return
+            }
             Diagnostics.error(
                 "system_tts",
                 "system_tts.synthesis.failure",
@@ -193,7 +209,7 @@ class VieNeuTtsService : TextToSpeechService() {
                 mapOf("synthesis_id" to synthesisId, "profile_id" to profile.id),
             )
             totalSpan.end(false, mapOf("error" to (t.message ?: t.javaClass.simpleName)))
-            if (stopEpoch.get() == epoch) callback.error()
+            callback.error()
         }
     }
 
