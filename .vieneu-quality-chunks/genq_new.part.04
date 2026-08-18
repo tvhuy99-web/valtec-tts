@@ -1,0 +1,90 @@
+            const std::vector<double> time_frame =
+                v3_irfft(half, kDenoiseFft);
+            if (time_frame.size() != static_cast<size_t>(kDenoiseFft)) {
+                warning = "Reference denoiser iSTFT failed.";
+                return false;
+            }
+            const size_t offset =
+                frame * static_cast<size_t>(kDenoiseHop);
+            for (int i = 0; i < kDenoiseFft; ++i) {
+                const double w = window[static_cast<size_t>(i)];
+                signal[offset + static_cast<size_t>(i)] +=
+                    time_frame[static_cast<size_t>(i)] * w;
+                window_sum[offset + static_cast<size_t>(i)] += w * w;
+            }
+        }
+
+        for (size_t i = 0; i < signal.size(); ++i) {
+            signal[i] /= (std::max)(window_sum[i], 1.0e-11);
+        }
+
+        if (signal_length <= static_cast<size_t>(2 * kDenoisePad)) {
+            warning = "Reference denoiser iSTFT output is too short.";
+            return false;
+        }
+        const size_t centered_length =
+            signal_length - static_cast<size_t>(2 * kDenoisePad);
+        output.sample_rate = kDenoiseRate;
+        output.mono.assign(output_length, 0.0f);
+        const size_t copy_length = (std::min)(output_length, centered_length);
+        for (size_t i = 0; i < copy_length; ++i) {
+            const double value =
+                signal[static_cast<size_t>(kDenoisePad) + i] * abs_max;
+            if (!std::isfinite(value)) {
+                output = V3NativeWaveform{};
+                warning = "Reference denoiser produced non-finite samples.";
+                return false;
+            }
+            output.mono[i] = static_cast<float>(value);
+        }
+        return true;
+    } catch (const std::exception& e) {
+        output = V3NativeWaveform{};
+        warning = std::string("Reference denoiser failed: ") + e.what();
+        return false;
+    }
+}'''
+
+regex_once(
+    reference_cpp,
+    r'''bool V3NativeDenoiser::denoise\(const V3NativeWaveform& input, V3NativeWaveform& output, std::string& warning\) \{.*?\n\}''',
+    denoiser,
+    'native denoiser parity implementation',
+)
+
+for path, fragments in {
+    reference_h: ('v3_resample_sinc(',),
+    reference_cpp: (
+        'std::gcd(input_rate, output_rate)',
+        'kSpeakerRate, 64, 0.95, true, 14.769656459379492',
+        'kDenoiseFft = 1680',
+        'kDenoiseHop = 420',
+        'kDenoiseTailPad = 441',
+        'memory.enable_memory_arena_shrinkage',
+        'sep_mag',
+        'v3_irfft(',
+    ),
+    engine_cpp: (
+        'sample_rate(), 6, 0.99, false, 0.0',
+        'sampler_.reset_seed(sampling_seed)',
+    ),
+}.items():
+    text = path.read_text(encoding='utf-8')
+    missing = [fragment for fragment in fragments if fragment not in text]
+    if missing:
+        raise RuntimeError(f'{path}: missing generation quality fragments {missing}')
+
+for path in (reference_h, reference_cpp, engine_cpp):
+    if 'v3_resample_linear' in path.read_text(encoding='utf-8'):
+        raise RuntimeError(f'{path}: linear resampling remains')
+
+reference_text = reference_cpp.read_text(encoding='utf-8')
+forbidden_reference = (
+    'STFT/iSTFT denoiser path is not enabled yet',
+    'using raw reference audio',
+)
+found = [fragment for fragment in forbidden_reference if fragment in reference_text]
+if found:
+    raise RuntimeError(f'{reference_cpp}: stale denoiser fallback remains {found}')
+
+print('Applied generation quality, strict completion, sinc resampling and native reference denoiser parity')
