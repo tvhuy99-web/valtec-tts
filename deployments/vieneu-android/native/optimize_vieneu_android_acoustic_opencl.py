@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-'''Run VieNeu's acoustic projection, FFN, and sampling-head graphs on OpenCL.
+'''Run VieNeu acoustic hot paths directly on OpenCL with canonical F32 weights.
 
-The upstream acoustic implementation accepts a ggml backend but discards it and
-allocates every graph in host RAM, so the semantic backbone can be on Adreno
-while more than 97% of synthesis remains on CPU. This Android-only patch keeps
-all large acoustic weights in OpenCL buffers and performs only small input and
-output transfers per autoregressive step. Unsupported GPU graphs fail loudly;
-there is no automatic CPU fallback for these hot paths.
+This is the production quality configuration. Older Android builds first
+converted projection/FFN weights to FP16/Q8 and then ran a second patch to undo
+those conversions back to F32. This patch now materializes the final OpenCL F32
+state directly, so production no longer depends on mutually cancelling patches.
 '''
 
 import pathlib
@@ -56,6 +54,7 @@ public:
                     bool allow_f16 = false) {
         release();
         (void)n_threads;
+        (void)allow_f16;
         backend_ = backend;
         if (!backend_) {
             throw std::runtime_error("OpenCL acoustic linear received a null backend.");
@@ -63,12 +62,7 @@ public:
 
         in_dim_ = in_dim;
         out_dim_ = out_dim;
-        use_f16_ = allow_f16;
-        const ggml_type weight_type = use_f16_ ? GGML_TYPE_F16 : GGML_TYPE_F32;
 
-        // With no_alloc=true the context stores only tensor/graph metadata. The
-        // actual weights, input, intermediates and output are allocated once in
-        // an OpenCL backend buffer and remain resident for the engine lifetime.
         ggml_init_params params = {
             /* .mem_size   = */ 1024 * 1024,
             /* .mem_buffer = */ nullptr,
@@ -79,7 +73,7 @@ public:
             throw std::runtime_error("Failed to initialize metadata context for OpenCL acoustic linear.");
         }
 
-        weight_ = ggml_new_tensor_2d(ctx_, weight_type, in_dim_, out_dim_);
+        weight_ = ggml_new_tensor_2d(ctx_, GGML_TYPE_F32, in_dim_, out_dim_);
         input_ = ggml_new_tensor_1d(ctx_, GGML_TYPE_F32, in_dim_);
         output_ = ggml_mul_mat(ctx_, weight_, input_);
         ggml_set_input(input_);
@@ -92,14 +86,8 @@ public:
             throw std::runtime_error("Failed to allocate OpenCL acoustic linear buffer.");
         }
 
-        if (use_f16_) {
-            std::vector<ggml_fp16_t> converted(static_cast<size_t>(in_dim_) * out_dim_);
-            ggml_fp32_to_fp16_row(weight, converted.data(), static_cast<int64_t>(converted.size()));
-            ggml_backend_tensor_set(weight_, converted.data(), 0, converted.size() * sizeof(ggml_fp16_t));
-        } else {
-            ggml_backend_tensor_set(
-                weight_, weight, 0, static_cast<size_t>(in_dim_) * out_dim_ * sizeof(float));
-        }
+        ggml_backend_tensor_set(
+            weight_, weight, 0, static_cast<size_t>(in_dim_) * out_dim_ * sizeof(float));
     }
 
     void run(const float* input, std::vector<float>& output) {
@@ -131,7 +119,6 @@ private:
         graph_ = nullptr;
         in_dim_ = 0;
         out_dim_ = 0;
-        use_f16_ = false;
     }
 
     ggml_backend_t backend_ = nullptr;
@@ -143,7 +130,6 @@ private:
     ggml_cgraph* graph_ = nullptr;
     int in_dim_ = 0;
     int out_dim_ = 0;
-    bool use_f16_ = false;
 };
 
 class GgmlFfnOp'''
@@ -151,7 +137,7 @@ class GgmlFfnOp'''
 replace_regex_once(
     r'class GgmlLinear \{.*?\n\};\n\nclass GgmlFfnOp',
     linear_class,
-    'replace CPU acoustic linear with OpenCL linear',
+    'replace CPU acoustic linear with canonical F32 OpenCL linear',
 )
 
 ffn_class = r'''class GgmlFfnOp {
@@ -174,13 +160,7 @@ public:
         }
         hidden_dim_ = hidden_dim;
         intermediate_dim_ = intermediate_dim;
-        use_q8_ = env_flag_enabled("VIENEU_ACOUSTIC_Q8_FFN", true);
-        const int64_t q8_block = ggml_blck_size(GGML_TYPE_Q8_0);
-        if (use_q8_ && (hidden_dim_ % q8_block != 0 || intermediate_dim_ % q8_block != 0)) {
-            use_q8_ = false;
-        }
 
-        const ggml_type weight_type = use_q8_ ? GGML_TYPE_Q8_0 : GGML_TYPE_F32;
         ggml_init_params params = {
             /* .mem_size   = */ 2 * 1024 * 1024,
             /* .mem_buffer = */ nullptr,
@@ -191,9 +171,9 @@ public:
             throw std::runtime_error("Failed to initialize metadata context for OpenCL acoustic FFN.");
         }
 
-        gate_weight_ = ggml_new_tensor_2d(ctx_, weight_type, hidden_dim_, intermediate_dim_);
-        up_weight_ = ggml_new_tensor_2d(ctx_, weight_type, hidden_dim_, intermediate_dim_);
-        down_weight_ = ggml_new_tensor_2d(ctx_, weight_type, intermediate_dim_, hidden_dim_);
+        gate_weight_ = ggml_new_tensor_2d(ctx_, GGML_TYPE_F32, hidden_dim_, intermediate_dim_);
+        up_weight_ = ggml_new_tensor_2d(ctx_, GGML_TYPE_F32, hidden_dim_, intermediate_dim_);
+        down_weight_ = ggml_new_tensor_2d(ctx_, GGML_TYPE_F32, intermediate_dim_, hidden_dim_);
         input_ = ggml_new_tensor_1d(ctx_, GGML_TYPE_F32, hidden_dim_);
 
         ggml_tensor* gate = ggml_mul_mat(ctx_, gate_weight_, input_);
@@ -211,28 +191,9 @@ public:
             throw std::runtime_error("Failed to allocate OpenCL acoustic FFN buffer.");
         }
 
-        auto upload = [this, weight_type](ggml_tensor* tensor,
-                                          const float* source,
-                                          int64_t rows,
-                                          int64_t elements_per_row) {
-            if (weight_type == GGML_TYPE_Q8_0) {
-                std::vector<uint8_t> quantized(ggml_nbytes(tensor));
-                ggml_quantize_chunk(
-                    GGML_TYPE_Q8_0,
-                    source,
-                    quantized.data(),
-                    0,
-                    rows,
-                    elements_per_row,
-                    nullptr);
-                ggml_backend_tensor_set(tensor, quantized.data(), 0, quantized.size());
-            } else {
-                ggml_backend_tensor_set(tensor, source, 0, ggml_nbytes(tensor));
-            }
-        };
-        upload(gate_weight_, gate_weight, intermediate_dim_, hidden_dim_);
-        upload(up_weight_, up_weight, intermediate_dim_, hidden_dim_);
-        upload(down_weight_, down_weight, hidden_dim_, intermediate_dim_);
+        ggml_backend_tensor_set(gate_weight_, gate_weight, 0, ggml_nbytes(gate_weight_));
+        ggml_backend_tensor_set(up_weight_, up_weight, 0, ggml_nbytes(up_weight_));
+        ggml_backend_tensor_set(down_weight_, down_weight, 0, ggml_nbytes(down_weight_));
     }
 
     void run(const float* input, std::vector<float>& output) {
@@ -264,7 +225,6 @@ private:
         graph_ = nullptr;
         hidden_dim_ = 0;
         intermediate_dim_ = 0;
-        use_q8_ = false;
     }
 
     ggml_backend_t backend_ = nullptr;
@@ -278,7 +238,6 @@ private:
     ggml_cgraph* graph_ = nullptr;
     int hidden_dim_ = 0;
     int intermediate_dim_ = 0;
-    bool use_q8_ = false;
 };
 
 } // namespace'''
@@ -286,7 +245,7 @@ private:
 replace_regex_once(
     r'class GgmlFfnOp \{.*?\n\};\n\n\} // namespace',
     ffn_class,
-    'replace CPU acoustic FFN with OpenCL FFN',
+    'replace CPU acoustic FFN with canonical F32 OpenCL FFN',
 )
 
 replace_once(
@@ -304,9 +263,9 @@ replace_once(
         std::cerr << "[V3NativeDiag] stage=acoustic.backend"
                   << " backend=\\\"" << (ggml_backend_name(backend) ? ggml_backend_name(backend) : "") << "\\\""
                   << " device=\\\"" << (device && ggml_backend_dev_description(device) ? ggml_backend_dev_description(device) : "") << "\\\""
-                  << " mode=OpenCL-only\\n";
+                  << " precision=F32 qkv=F32 o_proj=F32 ffn=F32 heads=F32 cpu_fallback=0\\n";
 ''',
-    'initialize acoustic OpenCL backend',
+    'initialize canonical F32 acoustic OpenCL backend',
 )
 
 replace_once(
@@ -331,15 +290,16 @@ replace_once(
     'release acoustic buffers before OpenCL backend',
 )
 
-replace_once(
-    '''            std::cout << "[V3NativeDiag] stage=acoustic.linear_mode"
-                      << " qkv=F16 o_proj=F16 ffn=Q8_0 heads=F32" << std::endl;
-''',
-    '''            std::cout << "[V3NativeDiag] stage=acoustic.linear_mode"
-                      << " backend=OpenCL qkv=F16 o_proj=F16 ffn=Q8_0 heads=F32 cpu_fallback=0" << std::endl;
-''',
-    'OpenCL acoustic diagnostics mode',
-)
-
 path.write_text(text, encoding='utf-8')
-print('Applied OpenCL-resident acoustic projection, FFN and sampling-head graphs')
+
+checks = (
+    'GGML_TYPE_F32',
+    'precision=F32 qkv=F32 o_proj=F32 ffn=F32 heads=F32',
+    'ggml_backend_opencl_init()',
+)
+final_text = path.read_text(encoding='utf-8')
+missing = [fragment for fragment in checks if fragment not in final_text]
+if missing:
+    raise RuntimeError(f'{path}: missing canonical OpenCL F32 fragments {missing}')
+
+print('Applied canonical OpenCL F32 acoustic runtime without FP16/Q8 detour')
