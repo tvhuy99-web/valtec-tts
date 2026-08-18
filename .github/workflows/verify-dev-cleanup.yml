@@ -16,12 +16,24 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    env:
+      TARGET_SHA: 6736dbd5abea36ca16b43e9dc96de7d1ead36eab
     steps:
+      - name: Mark validation pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          gh api --method POST "repos/$REPO/statuses/$TARGET_SHA" \
+            -f state=pending \
+            -f context=vieneu-dev-cleanup-apk \
+            -f description='Waiting for canonical signed APK build'
+
       - name: Wait for canonical APK build
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          TARGET_SHA: 6736dbd5abea36ca16b43e9dc96de7d1ead36eab
         shell: bash
         run: |
           set -euo pipefail
