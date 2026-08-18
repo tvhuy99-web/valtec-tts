@@ -2,6 +2,7 @@
 
 import pathlib
 import re
+import runpy
 import sys
 
 if len(sys.argv) != 2:
@@ -15,6 +16,19 @@ for path in (native_kt, jni):
     if not path.is_file():
         raise RuntimeError(f"Missing materialized source: {path}")
 
+
+def apply_process_state_patch() -> None:
+    patch = pathlib.Path(__file__).with_name("patch_vieneu_system_tts_process_state.py")
+    if not patch.is_file():
+        raise RuntimeError(f"Missing System TTS process-state patch: {patch}")
+    saved_argv = sys.argv[:]
+    try:
+        sys.argv = [str(patch), str(root)]
+        runpy.run_path(str(patch), run_name="__main__")
+    finally:
+        sys.argv = saved_argv
+
+
 kt_text = native_kt.read_text(encoding="utf-8")
 jni_text = jni.read_text(encoding="utf-8")
 
@@ -24,6 +38,7 @@ if kt_marker in kt_text or jni_marker in jni_text:
     if kt_marker not in kt_text or jni_marker not in jni_text:
         raise RuntimeError("Direct PCM ABI is only partially materialized")
     print("System TTS direct PCM JNI path already materialized")
+    apply_process_state_patch()
     raise SystemExit(0)
 
 kt_pattern = re.compile(
@@ -145,3 +160,4 @@ if missing:
     raise RuntimeError(f"Direct System TTS PCM fragments missing after patch: {missing}")
 
 print("Materialized direct in-memory F32 PCM JNI path for Android System TTS")
+apply_process_state_patch()
