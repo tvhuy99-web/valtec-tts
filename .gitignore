@@ -38,6 +38,12 @@ raw_data/
 pretrained/*.pth
 pretrained/*.pt
 
+# Gradle / Android generated state
+.gradle/
+local.properties
+.cxx/
+.externalNativeBuild/
+
 # Android signing material
 *.jks
 *.keystore

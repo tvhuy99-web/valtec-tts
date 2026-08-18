@@ -29,3 +29,8 @@ outputs/
 *.mp3
 pretrained/*.pth
 pretrained/zeroshot/*.pth
+.gradle/
+.idea/
+local.properties
+.cxx/
+.externalNativeBuild/
