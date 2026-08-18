@@ -1,0 +1,31 @@
+        "kReferenceCodesCacheVersion = 4",
+        ".vieneu-refcodes-v4.bin",
+        "reference.codes_cache_hit",
+        "reference.codes_cache_miss",
+        "save_reference_codes_cache",
+    ),
+    activity: (
+        'MessageDigest.getInstance("SHA-256")',
+        cache_namespace,
+        "active-" + cache_namespace,
+        legacy_cache_namespace,
+        ".vieneu-speaker-v4.bin",
+        ".vieneu-refcodes-v4.bin",
+        "persistent_v4",
+        "reference_trimmed_to_8s",
+        "dùng 8,0 giây đầu",
+        "mẫu dưới 3 giây",
+    ),
+    jni: ("persistent_v4", "reference_codes_cache"),
+    gradle: ("versionCode = 21", "0.9.4-content-addressed-cache"),
+}
+for path, fragments in checks.items():
+    text = path.read_text(encoding="utf-8")
+    missing = [fragment for fragment in fragments if fragment not in text]
+    if missing:
+        raise RuntimeError(f"{path}: missing cache-v4 fragments {missing}")
+
+print(
+    "Applied reference cache v4 with preprocessing invalidation, persistent speaker embedding, "
+    f"persistent reference codes and namespace {cache_namespace}"
+)
