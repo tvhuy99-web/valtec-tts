@@ -6,7 +6,9 @@ import android.speech.tts.SynthesisCallback
 import android.speech.tts.SynthesisRequest
 import android.speech.tts.TextToSpeech
 import android.speech.tts.TextToSpeechService
+import android.speech.tts.Voice
 import java.io.File
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
@@ -18,6 +20,16 @@ class VieNeuTtsService : TextToSpeechService() {
     override fun onCreate() {
         super.onCreate()
         Diagnostics.start(this)
+        configureNativeDiagnostics()
+        Diagnostics.log(
+            "system_tts",
+            "system_tts.service_created",
+            data = mapOf(
+                "package" to packageName,
+                "engine_discoverable" to VoiceCatalog.isEngineDiscoverable(this),
+                "catalog_voice_count" to VoiceCatalog.list(this).size,
+            ),
+        )
         warmExecutor.execute {
             runCatching { warmConfiguredVoice() }
                 .onFailure {
@@ -38,7 +50,11 @@ class VieNeuTtsService : TextToSpeechService() {
     override fun onIsLanguageAvailable(lang: String?, country: String?, variant: String?): Int {
         val normalized = lang?.lowercase().orEmpty()
         return when (normalized) {
-            "vi", "vie" -> if (country.isNullOrBlank() || country.equals("VN", true) || country.equals("VNM", true)) {
+            "vi", "vie" -> if (
+                country.isNullOrBlank() ||
+                country.equals("VN", true) ||
+                country.equals("VNM", true)
+            ) {
                 TextToSpeech.LANG_COUNTRY_AVAILABLE
             } else {
                 TextToSpeech.LANG_AVAILABLE
@@ -49,6 +65,64 @@ class VieNeuTtsService : TextToSpeechService() {
 
     override fun onLoadLanguage(lang: String?, country: String?, variant: String?): Int =
         onIsLanguageAvailable(lang, country, variant)
+
+    override fun onGetVoices(): MutableList<Voice> {
+        val voices = VoiceCatalog.list(this)
+            .filter { it.isReady }
+            .map { entry ->
+                Voice(
+                    entry.key,
+                    Locale.forLanguageTag("vi-VN"),
+                    Voice.QUALITY_HIGH,
+                    Voice.LATENCY_LOW,
+                    false,
+                    emptySet(),
+                )
+            }
+            .toMutableList()
+        Diagnostics.log(
+            "system_tts",
+            "system_tts.voices_queried",
+            data = mapOf(
+                "voice_count" to voices.size,
+                "voice_names" to voices.joinToString(",") { it.name },
+            ),
+        )
+        return voices
+    }
+
+    override fun onIsValidVoiceName(voiceName: String?): Int =
+        if (VoiceCatalog.find(this, voiceName)?.isReady == true) TextToSpeech.SUCCESS
+        else TextToSpeech.ERROR
+
+    override fun onLoadVoice(voiceName: String?): Int {
+        val voice = VoiceCatalog.find(this, voiceName)
+        val result = if (voice?.isReady == true) TextToSpeech.SUCCESS else TextToSpeech.ERROR
+        Diagnostics.log(
+            "system_tts",
+            "system_tts.voice_load",
+            data = mapOf(
+                "voice_name" to voiceName,
+                "resolved_label" to voice?.label,
+                "resolved_source" to voice?.source?.name,
+                "result" to result,
+            ),
+        )
+        return result
+    }
+
+    override fun onGetDefaultVoiceNameFor(
+        lang: String?,
+        country: String?,
+        variant: String?,
+    ): String {
+        if (onIsLanguageAvailable(lang, country, variant) < TextToSpeech.LANG_AVAILABLE) return ""
+        val settings = VoiceProfileStore.loadSettings(this)
+        return VoiceCatalog.resolve(this, settings)
+            ?.takeIf { it.isReady }
+            ?.key
+            ?: VoiceCatalog.default(this)?.takeIf { it.isReady }?.key.orEmpty()
+    }
 
     override fun onStop() {
         val epoch = stopEpoch.incrementAndGet()
@@ -70,13 +144,22 @@ class VieNeuTtsService : TextToSpeechService() {
         }
 
         val settings = VoiceProfileStore.loadSettings(this)
-        val profile = VoiceProfileStore.get(this, settings.profileId)
-        if (profile == null || !profile.cacheReady || !profile.referenceFile.isFile) {
+        val requestedVoiceName = request.voiceName?.takeIf { it.isNotBlank() }
+        val voice = requestedVoiceName
+            ?.let { VoiceCatalog.find(this, it) }
+            ?.takeIf { it.isReady }
+            ?: VoiceCatalog.resolve(this, settings)?.takeIf { it.isReady }
+            ?: VoiceCatalog.default(this)?.takeIf { it.isReady }
+        if (voice == null) {
             Diagnostics.log(
                 "system_tts",
                 "system_tts.synthesis.rejected",
                 level = "WARN",
-                data = mapOf("reason" to "voice_profile_missing"),
+                data = mapOf(
+                    "reason" to "voice_missing_or_not_ready",
+                    "requested_voice_name" to requestedVoiceName,
+                    "catalog_voice_count" to VoiceCatalog.list(this).size,
+                ),
             )
             callback.error()
             return
@@ -86,10 +169,27 @@ class VieNeuTtsService : TextToSpeechService() {
                 "system_tts",
                 "system_tts.synthesis.rejected",
                 level = "WARN",
-                data = mapOf("reason" to "model_not_ready"),
+                data = mapOf("reason" to "model_not_ready", "voice_key" to voice.key),
             )
             callback.error()
             return
+        }
+
+        val referencePath = when (voice.source) {
+            VoiceCatalogSource.PRESET -> ""
+            VoiceCatalogSource.SAVED -> voice.referenceFile
+                ?.takeIf { it.isFile && it.length() > 44L }
+                ?.absolutePath
+                ?: run {
+                    Diagnostics.log(
+                        "system_tts",
+                        "system_tts.synthesis.rejected",
+                        level = "WARN",
+                        data = mapOf("reason" to "saved_voice_reference_missing", "voice_key" to voice.key),
+                    )
+                    callback.error()
+                    return
+                }
         }
 
         val requestRate = request.speechRate.takeIf { it > 0 }?.div(100.0f) ?: 1.0f
@@ -107,8 +207,12 @@ class VieNeuTtsService : TextToSpeechService() {
                 "synthesis_id" to synthesisId,
                 "text_chars" to text.length,
                 "chunks" to chunks.size,
-                "profile_id" to profile.id,
-                "profile_name" to profile.name,
+                "requested_voice_name" to requestedVoiceName,
+                "voice_key" to voice.key,
+                "voice_label" to voice.label,
+                "voice_source" to voice.source.name,
+                "native_voice_id" to voice.nativeVoiceId,
+                "profile_id" to voice.profileId,
                 "rate" to effectiveRate,
                 "pitch" to effectivePitch,
                 "volume" to settings.volume,
@@ -131,8 +235,8 @@ class VieNeuTtsService : TextToSpeechService() {
                 try {
                     val written = VieNeuNative.synthesize(
                         chunk,
-                        profile.referenceFile.absolutePath,
-                        profile.id,
+                        referencePath,
+                        voice.nativeVoiceId,
                         true,
                         false,
                         "",
@@ -182,7 +286,8 @@ class VieNeuTtsService : TextToSpeechService() {
                                     "synthesis_id" to synthesisId,
                                     "first_pcm_ms" to firstPcmMs,
                                     "engine_already_ready" to engineWasReady,
-                                    "profile_cache_ready" to profile.cacheReady,
+                                    "voice_key" to voice.key,
+                                    "voice_source" to voice.source.name,
                                     "text_chars" to text.length,
                                     "first_chunk_chars" to chunk.length,
                                     "sample_rate_hz" to processed.sampleRate,
@@ -209,6 +314,7 @@ class VieNeuTtsService : TextToSpeechService() {
                         "first_pcm_ms" to firstPcmMs,
                         "engine_ready" to VieNeuEngine.isReady(),
                         "engine_already_ready" to engineWasReady,
+                        "voice_key" to voice.key,
                     ),
                 )
             }
@@ -228,28 +334,98 @@ class VieNeuTtsService : TextToSpeechService() {
                 "system_tts",
                 "system_tts.synthesis.failure",
                 t,
-                mapOf("synthesis_id" to synthesisId, "profile_id" to profile.id, "first_pcm_ms" to firstPcmMs),
+                mapOf(
+                    "synthesis_id" to synthesisId,
+                    "voice_key" to voice.key,
+                    "profile_id" to voice.profileId,
+                    "first_pcm_ms" to firstPcmMs,
+                ),
             )
             totalSpan.end(false, mapOf("error" to (t.message ?: t.javaClass.simpleName), "first_pcm_ms" to firstPcmMs))
             callback.error()
         }
     }
 
+    private fun configureNativeDiagnostics() {
+        val error = try {
+            VieNeuNative.configureDiagnostics(
+                Diagnostics.currentSessionDir().absolutePath,
+                Diagnostics.sessionId,
+            )
+        } catch (t: Throwable) {
+            Diagnostics.error("system_tts", "system_tts.native_diagnostics.exception", t)
+            return
+        }
+        if (error.isNotEmpty()) {
+            Diagnostics.log(
+                "system_tts",
+                "system_tts.native_diagnostics.failure",
+                level = "WARN",
+                data = mapOf("error" to error),
+            )
+        } else {
+            Diagnostics.log(
+                "system_tts",
+                "system_tts.native_diagnostics.ready",
+                data = mapOf("session_id" to Diagnostics.sessionId),
+            )
+        }
+    }
+
     private fun warmConfiguredVoice() {
         val settings = VoiceProfileStore.loadSettings(this)
-        val profile = VoiceProfileStore.get(this, settings.profileId) ?: return
-        if (!profile.cacheReady || !ModelManager.isReady(this)) return
+        val voice = VoiceCatalog.resolve(this, settings)?.takeIf { it.isReady } ?: return
+        if (!ModelManager.isReady(this)) return
+        val referencePath = when (voice.source) {
+            VoiceCatalogSource.PRESET -> ""
+            VoiceCatalogSource.SAVED -> voice.referenceFile?.takeIf { it.isFile }?.absolutePath ?: return
+        }
+
         val warmId = "system-tts-warm-${UUID.randomUUID()}"
         val initialized = VieNeuEngine.ensureInitialized(this, warmId)
+        var warmSynthesisMs: Double? = null
+        var warmSynthesisSuccess: Boolean? = null
+        var warmError: String? = null
+
+        if (initialized) {
+            val output = File(cacheDir, "$warmId.wav")
+            try {
+                val startNs = SystemClock.elapsedRealtimeNanos()
+                val written = VieNeuNative.synthesize(
+                    "Xin chào.",
+                    referencePath,
+                    voice.nativeVoiceId,
+                    true,
+                    false,
+                    "",
+                    output.absolutePath,
+                )
+                warmSynthesisMs = (SystemClock.elapsedRealtimeNanos() - startNs) / 1_000_000.0
+                warmSynthesisSuccess = written == output.absolutePath && output.isFile && output.length() > 44L
+                if (warmSynthesisSuccess != true) {
+                    warmError = VieNeuNative.lastError().ifBlank { "Warm-up synthesis không tạo WAV hợp lệ." }
+                }
+            } finally {
+                output.delete()
+            }
+        }
+
         Diagnostics.log(
             "system_tts",
             "system_tts.warm.complete",
+            level = if (warmError == null) "INFO" else "WARN",
             data = mapOf(
-                "profile_id" to profile.id,
+                "voice_key" to voice.key,
+                "voice_label" to voice.label,
+                "voice_source" to voice.source.name,
                 "engine_initialized_now" to initialized,
-                "cache_ready" to profile.cacheReady,
+                "warm_synthesis_performed" to initialized,
+                "warm_synthesis_success" to warmSynthesisSuccess,
+                "warm_synthesis_ms" to warmSynthesisMs,
+                "warm_error" to warmError,
             ),
         )
+        if (warmError != null) throw IllegalStateException(warmError)
     }
 
     private fun splitText(text: String): List<String> {
