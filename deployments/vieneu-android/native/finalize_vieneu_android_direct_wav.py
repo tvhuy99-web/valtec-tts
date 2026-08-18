@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Finalize the Android ABI so synthesized audio is written natively as PCM16 WAV.
-
-The VieNeu engine still owns its native float waveform, but JNI no longer creates
-and copies a second Java FloatArray. Kotlin receives only the written path and
-reads lightweight WAV metadata for diagnostics/playback.
-"""
+"""Finalize Android synthesis so JNI writes PCM16 WAV instead of returning FloatArray."""
 
 import re
 import sys
@@ -41,7 +36,7 @@ replace_once(
     native_kt,
     "external fun synthesize(text: String, referenceWav: String, voiceId: String, style: String, useRefCodes: Boolean, deterministic: Boolean, dialect: String): FloatArray?",
     "external fun synthesize(text: String, referenceWav: String, voiceId: String, style: String, useRefCodes: Boolean, deterministic: Boolean, dialect: String, outputWav: String): String?",
-    "replace Java FloatArray synthesis ABI with native WAV path ABI",
+    "replace FloatArray JNI ABI",
 )
 
 replace_once(
@@ -84,6 +79,7 @@ bool write_pcm16_wav_atomic(
         error = "Invalid sample rate for WAV output.";
         return false;
     }
+
     constexpr std::uint64_t kMaxDataBytes = 0xffffffffULL - 36ULL;
     const std::uint64_t data_bytes64 = static_cast<std::uint64_t>(audio.size()) * 2ULL;
     if (data_bytes64 > kMaxDataBytes) {
@@ -123,25 +119,28 @@ bool write_pcm16_wav_atomic(
         return fail("Failed while writing WAV header.");
     }
 
-    unsigned char bytes[2];
-    for (float sample : audio) {
-        const float clipped = std::clamp(sample, -1.0f, 1.0f);
-        const int rounded = static_cast<int>(std::floor(clipped * 32767.0f + 0.5f));
-        const std::int16_t pcm = static_cast<std::int16_t>(std::clamp(rounded, -32767, 32767));
-        const std::uint16_t bits = static_cast<std::uint16_t>(pcm);
-        bytes[0] = static_cast<unsigned char>(bits & 0xffu);
-        bytes[1] = static_cast<unsigned char>((bits >> 8u) & 0xffu);
-        if (std::fwrite(bytes, 1, sizeof(bytes), file) != sizeof(bytes)) {
+    constexpr std::size_t kChunkSamples = 16384;
+    std::vector<unsigned char> pcm(kChunkSamples * 2u);
+    std::size_t offset = 0;
+    while (offset < audio.size()) {
+        const std::size_t count = std::min(kChunkSamples, audio.size() - offset);
+        for (std::size_t i = 0; i < count; ++i) {
+            const float clipped = std::clamp(audio[offset + i], -1.0f, 1.0f);
+            const int rounded = static_cast<int>(std::floor(clipped * 32767.0f + 0.5f));
+            const std::int16_t sample = static_cast<std::int16_t>(std::clamp(rounded, -32767, 32767));
+            const std::uint16_t bits = static_cast<std::uint16_t>(sample);
+            pcm[i * 2u] = static_cast<unsigned char>(bits & 0xffu);
+            pcm[i * 2u + 1u] = static_cast<unsigned char>((bits >> 8u) & 0xffu);
+        }
+        const std::size_t bytes = count * 2u;
+        if (std::fwrite(pcm.data(), 1, bytes, file) != bytes) {
             return fail("Failed while writing WAV PCM data.");
         }
+        offset += count;
     }
 
-    if (std::fflush(file) != 0) {
-        return fail("Failed to flush WAV output.");
-    }
-    if (::fsync(::fileno(file)) != 0) {
-        return fail("Failed to sync WAV output.");
-    }
+    if (std::fflush(file) != 0) return fail("Failed to flush WAV output.");
+    if (::fsync(::fileno(file)) != 0) return fail("Failed to sync WAV output.");
     if (std::fclose(file) != 0) {
         std::remove(temp_path.c_str());
         error = "Failed to close WAV output.";
@@ -162,20 +161,19 @@ replace_once(
     jni,
     '}\n\nextern "C" JNIEXPORT jstring JNICALL\nJava_com_vieneu_voiceclone_VieNeuNative_configureDiagnostics',
     helper + '}\n\nextern "C" JNIEXPORT jstring JNICALL\nJava_com_vieneu_voiceclone_VieNeuNative_configureDiagnostics',
-    "insert native PCM16 WAV writer",
+    "insert native WAV writer",
 )
-
 replace_once(
     jni,
     'extern "C" JNIEXPORT jfloatArray JNICALL\nJava_com_vieneu_voiceclone_VieNeuNative_synthesize(',
     'extern "C" JNIEXPORT jstring JNICALL\nJava_com_vieneu_voiceclone_VieNeuNative_synthesize(',
-    "change JNI synthesis return type",
+    "change synthesis JNI return type",
 )
 replace_once(
     jni,
     'jstring dialect) {',
     'jstring dialect, jstring output_wav) {',
-    "add output WAV path to JNI synthesis",
+    "add output WAV argument",
 )
 
 success_tail = r'''        const std::string output_path = from_jstring(env, output_wav);
@@ -187,9 +185,8 @@ success_tail = r'''        const std::string output_path = from_jstring(env, out
             set_error(wav_error.empty() ? "Failed to write native WAV output." : wav_error);
             return nullptr;
         }
-        const auto wav_write_end = std::chrono::steady_clock::now();
         const double wav_write_ms = std::chrono::duration<double, std::milli>(
-            wav_write_end - wav_write_start).count();
+            std::chrono::steady_clock::now() - wav_write_start).count();
         set_error("");
 
         const auto wall_end = std::chrono::steady_clock::now();
@@ -219,14 +216,7 @@ regex_once(
     jni,
     r'''        if \(audio\.size\(\) > static_cast<size_t>\(std::numeric_limits<jsize>::max\(\)\)\) \{.*?        return result;\n''',
     success_tail,
-    "replace Java FloatArray copy with native WAV write",
-)
-
-replace_once(
-    activity,
-    "VieNeuNative.synthesize(text, referencePath, voiceId, style, useRefCodes, deterministic, dialect)",
-    "VieNeuNative.synthesize(text, referencePath, voiceId, style, useRefCodes, deterministic, dialect, out.absolutePath)",
-    "pass native output path",
+    "replace FloatArray allocation/copy with native WAV write",
 )
 
 new_generation_block = r'''                val out = File(filesDir, "outputs/vieneu_${System.currentTimeMillis()}.wav")
@@ -265,32 +255,25 @@ new_generation_block = r'''                val out = File(filesDir, "outputs/vie
                 }
                 val synthWallMs = (SystemClock.elapsedRealtimeNanos() - synthStart) / 1_000_000.0
                 if (writtenPath != out.absolutePath || !out.isFile || out.length() <= 44L) {
-                    synthSpan.end(
-                        false,
-                        mapOf(
-                            "generation_id" to generationId,
-                            "error" to "native_wav_missing_or_invalid",
-                            "returned_path" to writtenPath,
-                            "expected_path" to out.absolutePath,
-                            "bytes" to if (out.isFile) out.length() else 0L
-                        )
-                    )
+                    synthSpan.end(false, mapOf(
+                        "generation_id" to generationId,
+                        "error" to "native_wav_missing_or_invalid",
+                        "returned_path" to writtenPath,
+                        "bytes" to if (out.isFile) out.length() else 0L
+                    ))
                     throw IllegalStateException("Native không tạo được WAV đầu ra hợp lệ.")
                 }
 
                 val wav = Diagnostics.wavInfo(out)
                 val audioDurationMs = (wav["duration_ms"] as? Number)?.toDouble() ?: 0.0
-                synthSpan.end(
-                    true,
-                    mapOf(
-                        "generation_id" to generationId,
-                        "wall_ms_direct" to synthWallMs,
-                        "rtf" to if (audioDurationMs > 0.0) synthWallMs / audioDurationMs else null,
-                        "output" to wav,
-                        "audio_transport" to "native_wav_pcm16",
-                        "java_audio_buffer_bytes" to 0
-                    )
-                )
+                synthSpan.end(true, mapOf(
+                    "generation_id" to generationId,
+                    "wall_ms_direct" to synthWallMs,
+                    "rtf" to if (audioDurationMs > 0.0) synthWallMs / audioDurationMs else null,
+                    "output" to wav,
+                    "audio_transport" to "native_wav_pcm16",
+                    "java_audio_buffer_bytes" to 0
+                ))
                 outputFile = out
 '''
 
@@ -298,21 +281,19 @@ regex_once(
     activity,
     r'''                val synthSpan = Diagnostics\.span\(.*?                outputFile = out\n''',
     new_generation_block,
-    "replace Kotlin FloatArray/write pass with native WAV output",
+    "replace Kotlin FloatArray and WAV writer pass",
 )
-
 replace_once(
     activity,
     '                        "audio" to audioStats,\n',
     '                        "audio_transport" to "native_wav_pcm16",\n                        "java_audio_buffer_bytes" to 0,\n',
-    "remove app FloatArray statistics dependency",
+    "remove remaining app audioStats reference",
 )
-
 replace_once(
     gradle,
     'versionCode = 21\n        versionName = "0.9.4-content-addressed-cache"',
     'versionCode = 22\n        versionName = "0.9.5-native-wav-canonical-f32"',
-    "bump direct WAV Android version",
+    "bump direct WAV build version",
 )
 
 if wav_writer.exists():
@@ -320,18 +301,8 @@ if wav_writer.exists():
 
 checks = {
     native_kt: ("outputWav: String): String?",),
-    jni: (
-        "JNIEXPORT jstring JNICALL",
-        "jstring output_wav",
-        "write_pcm16_wav_atomic",
-        "java_audio_buffer_bytes\\\":0",
-        "native_wav_pcm16",
-    ),
-    activity: (
-        "audio_transport\" to \"native_wav_pcm16",
-        "java_audio_buffer_bytes\" to 0",
-        "out.parentFile?.mkdirs()",
-    ),
+    jni: ("jstring output_wav", "write_pcm16_wav_atomic", "native_wav_pcm16", "java_audio_buffer_bytes\\\":0"),
+    activity: ('"audio_transport" to "native_wav_pcm16"', '"java_audio_buffer_bytes" to 0', "out.parentFile?.mkdirs()"),
     gradle: ("versionCode = 22", "0.9.5-native-wav-canonical-f32"),
 }
 for path, fragments in checks.items():
@@ -345,7 +316,6 @@ for path in (native_kt, activity):
     forbidden = [fragment for fragment in ("FloatArray?", "WavWriter.writeMonoFloat", "audioStats") if fragment in text]
     if forbidden:
         raise RuntimeError(f"{path}: stale Java audio-buffer fragments remain {forbidden}")
-
 if wav_writer.exists():
     raise RuntimeError("WavWriter.kt must be removed after native WAV transport is materialized")
 
