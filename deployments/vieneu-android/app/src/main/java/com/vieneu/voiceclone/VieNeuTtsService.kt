@@ -1,6 +1,7 @@
 package com.vieneu.voiceclone
 
 import android.media.AudioFormat
+import android.os.SystemClock
 import android.speech.tts.SynthesisCallback
 import android.speech.tts.SynthesisRequest
 import android.speech.tts.TextToSpeech
@@ -59,6 +60,7 @@ class VieNeuTtsService : TextToSpeechService() {
     }
 
     override fun onSynthesizeText(request: SynthesisRequest, callback: SynthesisCallback) {
+        val requestStartNs = SystemClock.elapsedRealtimeNanos()
         val epoch = stopEpoch.get()
         val text = request.charSequenceText?.toString()?.trim().orEmpty()
         if (text.isBlank()) {
@@ -96,6 +98,7 @@ class VieNeuTtsService : TextToSpeechService() {
         val effectivePitch = (settings.pitch * requestPitch).coerceIn(0.5f, 2.0f)
         val chunks = splitText(text)
         val synthesisId = "system-tts-${UUID.randomUUID()}"
+        val engineWasReady = VieNeuEngine.isReady()
 
         val totalSpan = Diagnostics.span(
             "system_tts",
@@ -109,17 +112,18 @@ class VieNeuTtsService : TextToSpeechService() {
                 "rate" to effectiveRate,
                 "pitch" to effectivePitch,
                 "volume" to settings.volume,
-                "engine_already_ready" to VieNeuEngine.isReady(),
+                "engine_already_ready" to engineWasReady,
             ),
         )
 
         var callbackStarted = false
         var totalPcmBytes = 0L
+        var firstPcmMs: Double? = null
         try {
             VieNeuEngine.ensureInitialized(this, synthesisId)
             for ((index, chunk) in chunks.withIndex()) {
                 if (stopEpoch.get() != epoch) {
-                    totalSpan.end(false, mapOf("cancelled" to true, "chunk_index" to index))
+                    totalSpan.end(false, mapOf("cancelled" to true, "chunk_index" to index, "first_pcm_ms" to firstPcmMs))
                     return
                 }
 
@@ -147,7 +151,7 @@ class VieNeuTtsService : TextToSpeechService() {
                         settings.volume,
                     )
                     if (stopEpoch.get() != epoch) {
-                        totalSpan.end(false, mapOf("cancelled" to true, "chunk_index" to index))
+                        totalSpan.end(false, mapOf("cancelled" to true, "chunk_index" to index, "first_pcm_ms" to firstPcmMs))
                         return
                     }
 
@@ -162,12 +166,28 @@ class VieNeuTtsService : TextToSpeechService() {
                     var offset = 0
                     while (offset < bytes.size) {
                         if (stopEpoch.get() != epoch) {
-                            totalSpan.end(false, mapOf("cancelled" to true, "chunk_index" to index))
+                            totalSpan.end(false, mapOf("cancelled" to true, "chunk_index" to index, "first_pcm_ms" to firstPcmMs))
                             return
                         }
                         val count = minOf(maxChunk, bytes.size - offset)
                         if (callback.audioAvailable(bytes, offset, count) != TextToSpeech.SUCCESS) {
                             throw IllegalStateException("Android TTS từ chối dữ liệu PCM.")
+                        }
+                        if (firstPcmMs == null) {
+                            firstPcmMs = (SystemClock.elapsedRealtimeNanos() - requestStartNs) / 1_000_000.0
+                            Diagnostics.log(
+                                "system_tts",
+                                "system_tts.first_pcm",
+                                data = mapOf(
+                                    "synthesis_id" to synthesisId,
+                                    "first_pcm_ms" to firstPcmMs,
+                                    "engine_already_ready" to engineWasReady,
+                                    "profile_cache_ready" to profile.cacheReady,
+                                    "text_chars" to text.length,
+                                    "first_chunk_chars" to chunk.length,
+                                    "sample_rate_hz" to processed.sampleRate,
+                                ),
+                            )
                         }
                         offset += count
                         totalPcmBytes += count
@@ -186,7 +206,9 @@ class VieNeuTtsService : TextToSpeechService() {
                     true,
                     mapOf(
                         "pcm_bytes" to totalPcmBytes,
+                        "first_pcm_ms" to firstPcmMs,
                         "engine_ready" to VieNeuEngine.isReady(),
+                        "engine_already_ready" to engineWasReady,
                     ),
                 )
             }
@@ -194,11 +216,11 @@ class VieNeuTtsService : TextToSpeechService() {
             val cancelled = stopEpoch.get() != epoch ||
                 (t.message?.contains("VIENEU_CANCELLED", ignoreCase = true) == true)
             if (cancelled) {
-                totalSpan.end(false, mapOf("cancelled" to true))
+                totalSpan.end(false, mapOf("cancelled" to true, "first_pcm_ms" to firstPcmMs))
                 Diagnostics.log(
                     "system_tts",
                     "system_tts.synthesis.cancelled",
-                    data = mapOf("synthesis_id" to synthesisId),
+                    data = mapOf("synthesis_id" to synthesisId, "first_pcm_ms" to firstPcmMs),
                 )
                 return
             }
@@ -206,9 +228,9 @@ class VieNeuTtsService : TextToSpeechService() {
                 "system_tts",
                 "system_tts.synthesis.failure",
                 t,
-                mapOf("synthesis_id" to synthesisId, "profile_id" to profile.id),
+                mapOf("synthesis_id" to synthesisId, "profile_id" to profile.id, "first_pcm_ms" to firstPcmMs),
             )
-            totalSpan.end(false, mapOf("error" to (t.message ?: t.javaClass.simpleName)))
+            totalSpan.end(false, mapOf("error" to (t.message ?: t.javaClass.simpleName), "first_pcm_ms" to firstPcmMs))
             callback.error()
         }
     }
