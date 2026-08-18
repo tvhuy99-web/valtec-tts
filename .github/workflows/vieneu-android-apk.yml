@@ -2,6 +2,13 @@ name: VieNeu Android OpenCL Quality APK
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - dev
+    paths:
+      - 'deployments/vieneu-android/**'
+      - '.github/signing/vieneu-stable-debug.keystore.b64'
+      - '.github/workflows/vieneu-android-apk.yml'
   push:
     branches:
       - dev
