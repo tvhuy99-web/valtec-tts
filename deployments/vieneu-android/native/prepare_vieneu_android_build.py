@@ -167,6 +167,12 @@ def main() -> None:
     run_script(native_dir / "finalize_vieneu_android_direct_wav.py", str(android_root))
     run_script(native_dir / "finalize_vieneu_android_app.py", str(android_root))
 
+    # System TTS needs a second transport beside the normal app's canonical WAV
+    # path. Materialize it only after the final app/JNI ABI is known, but before
+    # diffs/manifests are captured. This keeps CMake purely declarative and gives
+    # CI a reproducible reviewed source diff for the direct in-memory PCM path.
+    run_script(native_dir / "patch_vieneu_system_tts_fast_pcm.py", str(android_root))
+
     if v092_source_script.read_bytes() != v092_source_original:
         raise RuntimeError("v092 source patch driver was not restored after materialization")
     if v092_android_script.read_bytes() != v092_android_original:
@@ -196,6 +202,29 @@ def main() -> None:
             "Materialization modified build tooling instead of only generated Android sources: "
             + ", ".join(unexpected_repo_changes)
         )
+
+    final_native_kt = android_root / "app/src/main/java/com/vieneu/voiceclone/VieNeuNative.kt"
+    final_jni = android_root / "native/vieneu_jni.cpp"
+    final_service = android_root / "app/src/main/java/com/vieneu/voiceclone/VieNeuTtsService.kt"
+    direct_contract = {
+        final_native_kt: ("synthesizeDirect(text: String", "dialect: String): FloatArray?"),
+        final_jni: (
+            "Java_com_vieneu_voiceclone_VieNeuNative_synthesizeDirect",
+            "jni_float_direct",
+            "SetFloatArrayRegion",
+        ),
+        final_service: (
+            "VieNeuNative.synthesizeDirect(",
+            "system_tts.pcm_cache.hit",
+            '"utterance_split" to false',
+            '"audio_transport" to "jni_float_direct"',
+        ),
+    }
+    for path, fragments in direct_contract.items():
+        text = path.read_text(encoding="utf-8")
+        missing = [fragment for fragment in fragments if fragment not in text]
+        if missing:
+            raise RuntimeError(f"Direct System TTS materialization contract missing in {path}: {missing}")
 
     run_checked("git", "diff", "--check", cwd=source)
     run_checked("git", "submodule", "foreach", "--recursive", "git diff --check", cwd=source)
@@ -273,6 +302,9 @@ def main() -> None:
         "reference_cache": "content-addressed-v4",
         "acoustic_runtime": "opencl-f32-canonical",
         "audio_transport": "native-wav-pcm16",
+        "system_tts_audio_transport": "jni-f32-direct",
+        "system_tts_utterance_split": False,
+        "system_tts_pcm_cache": "exact-lru",
         "java_audio_buffer_bytes": 0,
         "engine_scope": "process",
         "version_source": "deployments/vieneu-android/version.properties",
