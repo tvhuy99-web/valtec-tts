@@ -64,8 +64,20 @@ if not activity.is_file():
     raise RuntimeError(f'Missing generated MainActivity: {activity}')
 
 activity_lines = activity.read_text(encoding='utf-8').splitlines()
-print(f'Generated MainActivity full source ({len(activity_lines)} lines):')
-for index, line in enumerate(activity_lines):
-    print(f'MainActivity.kt:{index + 1}: {line}')
+hits = [
+    index for index, line in enumerate(activity_lines)
+    if 'AudioRecord' in line or 'recorder' in line
+]
+if not hits:
+    raise RuntimeError('RECORDER_DIAGNOSTIC: no AudioRecord/recorder references found')
 
-raise RuntimeError('Intentional diagnostic stop after dumping full generated MainActivity')
+emitted = set()
+snippets = []
+for hit in hits:
+    for index in range(max(0, hit - 6), min(len(activity_lines), hit + 7)):
+        if index in emitted:
+            continue
+        emitted.add(index)
+        snippets.append(f'{index + 1}:{activity_lines[index].strip()}')
+
+raise RuntimeError('RECORDER_DIAGNOSTIC=' + ' || '.join(snippets))
