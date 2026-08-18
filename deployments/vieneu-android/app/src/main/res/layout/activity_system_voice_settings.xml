@@ -13,7 +13,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Giọng đọc hệ thống"
+            android:text="Giọng đọc hệ thống VieNeu"
             android:textSize="26sp"
             android:textStyle="bold" />
 
@@ -21,20 +21,20 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
-            android:text="Chọn giọng VieNeu đã lưu để dùng với Android TTS, trình đọc màn hình và ứng dụng đọc sách." />
+            android:text="Danh sách này đồng bộ với màn hình tạo giọng: gồm các giọng có sẵn của VieNeu và mọi giọng clone đã lưu." />
 
         <Button
             android:id="@+id/saveActiveVoiceButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"
-            android:text="Lưu giọng hiện tại" />
+            android:text="Lưu giọng clone hiện tại" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"
-            android:text="Giọng đã lưu"
+            android:text="Giọng VieNeu"
             android:textStyle="bold" />
 
         <Spinner
@@ -48,7 +48,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
-            android:text="Xóa giọng đang chọn" />
+            android:text="Xóa giọng đã lưu đang chọn" />
 
         <TextView
             android:id="@+id/rateValue"
@@ -100,7 +100,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="14dp"
-            android:text="Chưa chọn giọng." />
+            android:text="Đang tải danh sách giọng…" />
 
         <Button
             android:id="@+id/previewSystemVoiceButton"
@@ -136,7 +136,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"
             android:paddingBottom="20dp"
-            android:text="Lưu giọng chỉ thành công khi cache speaker-v4 và refcodes-v4 đã được tạo. Điều này bảo đảm lần sử dụng sau không phải xử lý lại giọng mẫu."
+            android:text="Giọng có sẵn luôn dùng trực tiếp từ mô hình. Giọng clone đã lưu giữ WAV và cache speaker-v4/refcodes-v4 để dùng lại nhanh. Lưu cấu hình thành công sẽ tự đóng màn hình này."
             android:textSize="12sp" />
     </LinearLayout>
 </ScrollView>
