@@ -117,3 +117,4 @@ def main() -> None:
         raise RuntimeError(f"VieNeu source is not a git checkout: {source}")
     if not (repo_root / ".git").exists():
         raise RuntimeError(f"Android project is not inside the repository checkout: {repo_root}")
+
