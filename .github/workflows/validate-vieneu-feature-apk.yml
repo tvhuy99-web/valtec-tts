@@ -1,0 +1,80 @@
+name: Validate VieNeu Feature APK
+
+on:
+  pull_request:
+    branches:
+      - agent/ci-validate-native-wav-base
+    paths:
+      - 'deployments/vieneu-android/**'
+      - '.github/workflows/vieneu-android-apk.yml'
+      - '.github/workflows/validate-vieneu-feature-apk.yml'
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  dispatch-and-collect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 130
+    steps:
+      - name: Dispatch full APK workflow for PR head
+        id: dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run vieneu-android-apk.yml --repo "$REPO" --ref "$HEAD_REF"
+
+          RUN_ID=""
+          for _ in $(seq 1 30); do
+            RUN_ID="$(gh run list \
+              --repo "$REPO" \
+              --workflow vieneu-android-apk.yml \
+              --branch "$HEAD_REF" \
+              --event workflow_dispatch \
+              --limit 5 \
+              --json databaseId \
+              --jq '.[0].databaseId // empty')"
+            if [ -n "$RUN_ID" ]; then
+              break
+            fi
+            sleep 5
+          done
+          test -n "$RUN_ID"
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "Dispatched full APK workflow run: $RUN_ID"
+
+      - name: Wait for full APK build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ steps.dispatch.outputs.run_id }}
+        run: gh run watch "$RUN_ID" --repo "$REPO" --exit-status --interval 10
+
+      - name: Download validated APK artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ steps.dispatch.outputs.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p validated-artifact
+          gh run download "$RUN_ID" \
+            --repo "$REPO" \
+            --name vieneu-voice-clone-android-arm64-opencl-quality \
+            --dir validated-artifact
+          test -s validated-artifact/deployments/vieneu-android/app/build/outputs/apk/debug/app-debug.apk
+          find validated-artifact -type f -maxdepth 8 -print
+
+      - name: Upload validated APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: validated-vieneu-native-wav-apk
+          path: validated-artifact/**
+          retention-days: 30
+          if-no-files-found: error
