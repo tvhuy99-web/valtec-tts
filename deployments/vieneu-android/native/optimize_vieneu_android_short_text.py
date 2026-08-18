@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate Android voice UI, EOS handling and VieNeu 0.9.2 quality modes."""
+"""Generate Android voice UI, EOS handling and VieNeu 0.9.3 quality modes."""
 
 from pathlib import Path
 import runpy
@@ -58,6 +58,7 @@ if v092_text.count(old_regex) != 1:
     raise RuntimeError("0.9.2 Android patch regex helper shape changed")
 v092_android.write_text(v092_text.replace(old_regex, new_regex, 1), encoding="utf-8")
 run_script(v092_android, str(android_root))
+run_script(native_dir / "optimize_vieneu_android_v093_ui.py", str(android_root))
 
 text = jni_path.read_text(encoding="utf-8")
 required = (
@@ -88,9 +89,11 @@ forbidden = (
 found = [fragment for fragment in forbidden if fragment in text]
 if missing or found:
     raise RuntimeError(
-        f"generated JNI 0.9.2 policy invalid: missing={missing}, forbidden={found}"
+        f"generated JNI 0.9.3 policy invalid: missing={missing}, forbidden={found}"
     )
 
 print(
-    "Validated generated JNI: fast OpenCL F32, immediate EOS, one-pass deterministic chunks, persistent speaker cache and pronunciation controls"
+    "Validated generated JNI/UI: fast OpenCL F32, immediate EOS, one-pass "
+    "deterministic chunks, persistent speaker cache, pronunciation controls, "
+    "complete diagnostics reset and cleaned interface"
 )
