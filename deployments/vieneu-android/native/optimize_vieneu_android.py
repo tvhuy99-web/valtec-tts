@@ -13,6 +13,7 @@ assets_cpp_path = root / 'src/vieneu/v3_native/v3_native_assets.cpp'
 acoustic_cpp_path = root / 'src/vieneu/v3_native/v3_native_acoustic_ggml.cpp'
 backbone_cpp_path = root / 'src/vieneu/v3_native/v3_native_backbone_llama.cpp'
 
+cpp = cpp_path.read_text(encoding='utf-8')
 assets_cpp = assets_cpp_path.read_text(encoding='utf-8')
 acoustic_cpp = acoustic_cpp_path.read_text(encoding='utf-8')
 backbone_cpp = backbone_cpp_path.read_text(encoding='utf-8')
@@ -31,6 +32,24 @@ def regex_once(text: str, pattern: str, replacement: str, label: str) -> str:
         raise RuntimeError(f'{label}: expected exactly one regex match, found {count}')
     return updated
 
+
+cpp = replace_once(
+    cpp,
+    '''#include <fstream>
+#include <iostream>
+#include <stdexcept>
+
+#include <nlohmann/json.hpp>
+''',
+    '''#include <fstream>
+#include <iostream>
+#include <stdexcept>
+#include <sys/stat.h>
+
+#include <nlohmann/json.hpp>
+''',
+    'sys/stat include',
+)
 
 assets_cpp = replace_once(
     assets_cpp,
@@ -142,6 +161,7 @@ backbone_cpp = regex_once(
     'chunk Android prefill to bounded output allocation',
 )
 
+cpp_path.write_text(cpp, encoding='utf-8')
 assets_cpp_path.write_text(assets_cpp, encoding='utf-8')
 acoustic_cpp_path.write_text(acoustic_cpp, encoding='utf-8')
 backbone_cpp_path.write_text(backbone_cpp, encoding='utf-8')
