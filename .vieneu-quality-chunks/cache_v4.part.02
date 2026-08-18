@@ -1,0 +1,120 @@
+''',
+    '''    if (use_ref_codes && !reference_codes_cache_hit) {
+        std::cout << "[V3NativeCache] reference_codes=miss path=\""
+                  << reference_codes_cache_path(ref_audio_path) << "\"\n";
+        t_ref_stage = std::chrono::high_resolution_clock::now();
+        std::vector<float> mono48 = v3_resample_sinc(wav.mono, wav.sample_rate, sample_rate(), 6, 0.99, false, 0.0);
+''',
+    "reference codes cache miss path",
+)
+
+replace_once(
+    engine,
+    '''        if (!codec_.encode_stereo(stereo, frames, ref_codes, error)) return false;
+        ref_diag_ms("reference.codec_encode", t_ref_stage);
+    }
+    ref_diag_ms("reference.total", t_ref_total);
+''',
+    '''        if (!codec_.encode_stereo(stereo, frames, ref_codes, error)) return false;
+        ref_diag_ms("reference.codec_encode", t_ref_stage);
+        save_reference_codes_cache(
+            ref_audio_path,
+            effective_denoise,
+            config_.n_vq,
+            ref_codes);
+    }
+    ref_diag_ms("reference.total", t_ref_total);
+''',
+    "reference codes cache store",
+)
+
+replace_once(
+    activity,
+    "import java.util.UUID\n",
+    "import java.security.MessageDigest\nimport java.util.UUID\n",
+    "reference hashing import",
+)
+
+reference_block = f'''    private fun referenceStoreDir(): File =
+        File(filesDir, "references/{cache_namespace}").apply {{ mkdirs() }}
+
+    private fun referenceMarkerFile(): File =
+        File(filesDir, "references/active-{cache_namespace}.txt")
+
+    private fun sha256Hex(file: File): String {{
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().buffered(1024 * 1024).use {{ input ->
+            val buffer = ByteArray(1024 * 1024)
+            while (true) {{
+                val read = input.read(buffer)
+                if (read < 0) break
+                digest.update(buffer, 0, read)
+            }}
+        }}
+        return digest.digest().joinToString("") {{ byte ->
+            "%02x".format(byte.toInt() and 0xff)
+        }}
+    }}
+
+    private fun canonicalReferenceFile(hash: String): File =
+        File(referenceStoreDir(), "$hash.wav")
+
+    private fun writeActiveReferenceHash(hash: String) {{
+        val marker = referenceMarkerFile()
+        marker.parentFile?.mkdirs()
+        val temp = File(marker.absolutePath + ".new")
+        temp.writeText(hash + "\\n", Charsets.UTF_8)
+        if (marker.exists() && !marker.delete()) {{
+            temp.delete()
+            throw IllegalStateException("Không thể cập nhật giọng mẫu đang dùng.")
+        }}
+        if (!temp.renameTo(marker)) {{
+            temp.copyTo(marker, overwrite = true)
+            temp.delete()
+        }}
+    }}
+
+    private fun deleteReferenceCaches(wav: File) {{
+        val suffixes = listOf(
+            ".vieneu-speaker-v2.bin",
+            ".vieneu-speaker-v3.bin",
+            ".vieneu-speaker-v4.bin",
+            ".vieneu-refcodes-v4.bin"
+        )
+        suffixes.forEach {{ suffix -> File(wav.absolutePath + suffix).delete() }}
+    }}
+
+    private fun pruneReferenceStore(active: File) {{
+        val root = referenceStoreDir()
+        val stale = root.listFiles()
+            ?.filter {{ it.isFile && it.extension.equals("wav", ignoreCase = true) && it.absolutePath != active.absolutePath }}
+            ?.sortedByDescending {{ it.lastModified() }}
+            ?.drop(3)
+            .orEmpty()
+        stale.forEach {{ wav ->
+            deleteReferenceCaches(wav)
+            wav.delete()
+        }}
+    }}
+
+    private fun referenceUsage(wav: Map<String, Any?>): Triple<Double?, Double?, String> {{
+        val durationMs = (wav["duration_ms"] as? Number)?.toDouble()
+        val usedMs = durationMs?.coerceAtMost(8000.0)
+        val note = when {{
+            durationMs == null -> ""
+            durationMs > 8000.5 -> " • dùng 8,0 giây đầu"
+            durationMs < 3000.0 -> " • mẫu ngắn dưới 3 giây"
+            else -> ""
+        }}
+        return Triple(durationMs, usedMs, note)
+    }}
+
+    private fun migrateV3Reference(): File? {{
+        val legacyRoot = File(filesDir, "references/{legacy_cache_namespace}")
+        val legacyMarker = File(filesDir, "references/active-{legacy_cache_namespace}.txt")
+        val hash = runCatching {{ legacyMarker.readText(Charsets.UTF_8).trim().lowercase() }}.getOrNull()
+        if (hash == null || !hash.matches(Regex("[0-9a-f]{{64}}"))) return null
+        val legacy = File(legacyRoot, "$hash.wav")
+        if (!legacy.isFile || !looksLikeWav(legacy)) return null
+        val target = canonicalReferenceFile(hash)
+        if (!target.isFile) {{
