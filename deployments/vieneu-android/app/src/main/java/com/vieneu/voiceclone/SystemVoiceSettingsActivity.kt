@@ -4,10 +4,10 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.media.AudioAttributes
 import android.media.AudioFormat
-import android.media.AudioManager
 import android.media.AudioTrack
 import android.os.Bundle
 import android.view.View
+import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
@@ -21,8 +21,9 @@ import kotlin.math.max
 
 class SystemVoiceSettingsActivity : Activity() {
     private val executor = Executors.newSingleThreadExecutor()
-    private var profiles: List<VoiceProfile> = emptyList()
+    private var voices: List<VoiceCatalogEntry> = emptyList()
     private var previewTrack: AudioTrack? = null
+    private var busy = false
 
     private lateinit var voiceSpinner: Spinner
     private lateinit var rateSeek: SeekBar
@@ -67,63 +68,108 @@ class SystemVoiceSettingsActivity : Activity() {
         rateSeek.setOnSeekBarChangeListener(listener)
         pitchSeek.setOnSeekBarChangeListener(listener)
         volumeSeek.setOnSeekBarChangeListener(listener)
+        voiceSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                refreshVoiceActions()
+                selectedVoice()?.let { voice ->
+                    status.text = buildString {
+                        append(voice.label)
+                        append(" · ")
+                        append(
+                            when (voice.source) {
+                                VoiceCatalogSource.PRESET -> "giọng có sẵn"
+                                VoiceCatalogSource.SAVED -> "giọng đã lưu"
+                            },
+                        )
+                        if (!voice.isReady) append(" · chưa sẵn sàng")
+                    }
+                }
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {
+                refreshVoiceActions()
+            }
+        }
 
         saveActiveVoiceButton.setOnClickListener { askAndSaveActiveVoice() }
         deleteVoiceButton.setOnClickListener { deleteSelectedVoice() }
         previewButton.setOnClickListener { previewSelectedVoice() }
-        saveSettingsButton.setOnClickListener { saveSettings() }
+        saveSettingsButton.setOnClickListener { saveSettingsAndExit() }
         cancelSettingsButton.setOnClickListener {
-            loadSavedSettings()
-            status.text = "Đã hủy thay đổi chưa lưu."
+            setResult(RESULT_CANCELED)
+            finish()
         }
 
-        refreshProfiles()
+        refreshVoices()
         loadSavedSettings()
+        Diagnostics.log(
+            "system_tts",
+            "system_tts.settings_opened",
+            data = mapOf(
+                "engine_discoverable" to VoiceCatalog.isEngineDiscoverable(this),
+                "voice_count" to voices.size,
+            ),
+        )
     }
 
     override fun onResume() {
         super.onResume()
-        refreshProfiles(keepSelection = true)
+        refreshVoices(keepSelection = true)
     }
 
-    private fun refreshProfiles(keepSelection: Boolean = false) {
-        val previousId = if (keepSelection) selectedProfile()?.id else null
-        profiles = VoiceProfileStore.list(this)
+    private fun refreshVoices(keepSelection: Boolean = false, preferredKey: String? = null) {
+        val previousKey = if (keepSelection) selectedVoice()?.key else null
+        voices = VoiceCatalog.list(this)
         voiceSpinner.adapter = ArrayAdapter(
             this,
             android.R.layout.simple_spinner_dropdown_item,
-            if (profiles.isEmpty()) listOf("Chưa có giọng đã lưu") else profiles.map {
-                if (it.cacheReady) it.name else "${it.name} (cache chưa sẵn sàng)"
+            if (voices.isEmpty()) {
+                listOf("Chưa có giọng VieNeu sẵn sàng")
+            } else {
+                voices.map { voice ->
+                    if (voice.isReady) voice.label else "${voice.label} (chưa sẵn sàng)"
+                }
             },
         )
-        val desiredId = previousId ?: VoiceProfileStore.loadSettings(this).profileId
-        val selected = profiles.indexOfFirst { it.id == desiredId }
-        if (selected >= 0) voiceSpinner.setSelection(selected)
-        deleteVoiceButton.isEnabled = profiles.isNotEmpty()
-        previewButton.isEnabled = profiles.any { it.cacheReady }
-        saveSettingsButton.isEnabled = profiles.any { it.cacheReady }
-        if (profiles.isEmpty()) status.text = "Chưa có giọng nào được lưu."
+        val savedKey = VoiceProfileStore.loadSettings(this).voiceKey
+        val desiredKey = sequenceOf(preferredKey, previousKey, savedKey, VoiceCatalog.default(this)?.key)
+            .filterNotNull()
+            .firstOrNull { key -> voices.any { it.key == key } }
+        val selected = voices.indexOfFirst { it.key == desiredKey }
+        if (selected >= 0) voiceSpinner.setSelection(selected, false)
+        refreshVoiceActions()
+        if (voices.isEmpty()) {
+            status.text = if (ModelManager.isReady(this)) {
+                "Không đọc được danh sách giọng VieNeu."
+            } else {
+                "Mô hình chưa sẵn sàng nên chưa thể dùng giọng hệ thống."
+            }
+        }
     }
 
     private fun loadSavedSettings() {
         val settings = VoiceProfileStore.loadSettings(this)
-        val selected = profiles.indexOfFirst { it.id == settings.profileId }
-        if (selected >= 0) voiceSpinner.setSelection(selected)
+        val selected = voices.indexOfFirst { it.key == settings.voiceKey }
+        if (selected >= 0) voiceSpinner.setSelection(selected, false)
         rateSeek.progress = ((settings.rate - 0.5f) * 100f).toInt().coerceIn(0, rateSeek.max)
         pitchSeek.progress = ((settings.pitch - 0.5f) * 100f).toInt().coerceIn(0, pitchSeek.max)
         volumeSeek.progress = (settings.volume * 100f).toInt().coerceIn(0, volumeSeek.max)
         refreshControlLabels()
+        refreshVoiceActions()
     }
 
-    private fun currentSettings(): SystemVoiceSettings = SystemVoiceSettings(
-        profileId = selectedProfile()?.id,
-        rate = (0.5f + rateSeek.progress / 100f).coerceIn(0.5f, 2.0f),
-        pitch = (0.5f + pitchSeek.progress / 100f).coerceIn(0.5f, 2.0f),
-        volume = (volumeSeek.progress / 100f).coerceIn(0.0f, 1.0f),
-    )
+    private fun currentSettings(): SystemVoiceSettings {
+        val voice = selectedVoice()
+        return SystemVoiceSettings(
+            profileId = voice?.profileId,
+            rate = (0.5f + rateSeek.progress / 100f).coerceIn(0.5f, 2.0f),
+            pitch = (0.5f + pitchSeek.progress / 100f).coerceIn(0.5f, 2.0f),
+            volume = (volumeSeek.progress / 100f).coerceIn(0.0f, 1.0f),
+            voiceKey = voice?.key,
+        )
+    }
 
-    private fun selectedProfile(): VoiceProfile? =
-        profiles.getOrNull(voiceSpinner.selectedItemPosition)
+    private fun selectedVoice(): VoiceCatalogEntry? =
+        voices.getOrNull(voiceSpinner.selectedItemPosition)
 
     private fun refreshControlLabels() {
         val settings = currentSettings()
@@ -132,10 +178,20 @@ class SystemVoiceSettingsActivity : Activity() {
         volumeValue.text = "Âm lượng: %d%%".format((settings.volume * 100f).toInt())
     }
 
+    private fun refreshVoiceActions() {
+        val voice = selectedVoice()
+        val activeReferenceReady = VoiceProfileStore.activeReference(this)?.isFile == true
+        saveActiveVoiceButton.isEnabled = !busy && activeReferenceReady
+        deleteVoiceButton.isEnabled = !busy && voice?.source == VoiceCatalogSource.SAVED
+        previewButton.isEnabled = !busy && voice?.isReady == true
+        saveSettingsButton.isEnabled = !busy && voice?.isReady == true
+        cancelSettingsButton.isEnabled = !busy
+    }
+
     private fun askAndSaveActiveVoice() {
         val active = VoiceProfileStore.activeReference(this)
         if (active == null) {
-            status.text = "Chưa có giọng hiện tại. Hãy sang phần tạo giọng, chọn WAV và tạo thử một câu trước."
+            status.text = "Chưa có giọng clone hiện tại để lưu."
             return
         }
         val input = EditText(this).apply {
@@ -143,8 +199,8 @@ class SystemVoiceSettingsActivity : Activity() {
             setSingleLine(true)
         }
         AlertDialog.Builder(this)
-            .setTitle("Lưu giọng")
-            .setMessage("Giọng đã lưu sẽ giữ cache v4 để lần sau sử dụng ngay.")
+            .setTitle("Lưu giọng clone")
+            .setMessage("Giọng này sẽ xuất hiện đồng thời trong danh sách tạo giọng và danh sách giọng hệ thống.")
             .setView(input)
             .setNegativeButton("Hủy", null)
             .setPositiveButton("Lưu") { _, _ ->
@@ -165,10 +221,8 @@ class SystemVoiceSettingsActivity : Activity() {
                 ensureWarmReference(reference)
                 val profile = VoiceProfileStore.saveVoice(this, reference, name)
                 runOnUiThread {
-                    refreshProfiles()
-                    val index = profiles.indexOfFirst { it.id == profile.id }
-                    if (index >= 0) voiceSpinner.setSelection(index)
-                    status.text = "Đã lưu giọng “${profile.name}”. Cache v4 đã sẵn sàng."
+                    refreshVoices(preferredKey = VoiceCatalog.savedKey(profile.id))
+                    status.text = "Đã lưu giọng “${profile.name}”. Hai danh sách giọng đã đồng bộ."
                     setBusy(false)
                 }
             } catch (t: Throwable) {
@@ -208,36 +262,59 @@ class SystemVoiceSettingsActivity : Activity() {
     }
 
     private fun deleteSelectedVoice() {
-        val profile = selectedProfile() ?: return
+        val voice = selectedVoice() ?: return
+        if (voice.source != VoiceCatalogSource.SAVED || voice.profileId.isNullOrBlank()) {
+            status.text = "Giọng có sẵn của VieNeu không thể xóa."
+            return
+        }
         AlertDialog.Builder(this)
             .setTitle("Xóa giọng")
-            .setMessage("Xóa giọng “${profile.name}”? Tệp giọng và cache đã lưu sẽ bị xóa.")
+            .setMessage("Xóa giọng “${voice.label}”? Giọng này sẽ biến mất khỏi cả hai danh sách.")
             .setNegativeButton("Hủy", null)
             .setPositiveButton("Xóa") { _, _ ->
-                VoiceProfileStore.delete(this, profile.id)
-                refreshProfiles()
+                VoiceProfileStore.delete(this, voice.profileId)
+                refreshVoices()
                 loadSavedSettings()
-                status.text = "Đã xóa giọng “${profile.name}”."
+                status.text = "Đã xóa giọng “${voice.label}” khỏi cả hai danh sách."
             }
             .show()
     }
 
-    private fun saveSettings() {
+    private fun saveSettingsAndExit() {
         val settings = currentSettings()
-        val profile = selectedProfile()
-        if (profile == null || !profile.cacheReady) {
-            status.text = "Hãy chọn một giọng có cache v4 sẵn sàng."
+        val voice = selectedVoice()
+        if (voice == null || !voice.isReady) {
+            status.text = "Hãy chọn một giọng VieNeu đã sẵn sàng."
             return
         }
         VoiceProfileStore.saveSettings(this, settings)
-        status.text = "Đã lưu cấu hình giọng đọc hệ thống."
+        VoiceCatalog.notifyChanged(this, "system_voice_settings_saved")
+        Diagnostics.log(
+            "system_tts",
+            "system_tts.settings_save_and_exit",
+            data = mapOf(
+                "voice_key" to voice.key,
+                "voice_label" to voice.label,
+                "voice_source" to voice.source.name,
+            ),
+        )
+        setResult(RESULT_OK)
+        finish()
     }
 
     private fun previewSelectedVoice() {
-        val profile = selectedProfile()
-        if (profile == null || !profile.cacheReady) {
-            status.text = "Hãy chọn một giọng đã lưu có cache v4."
+        val voice = selectedVoice()
+        if (voice == null || !voice.isReady) {
+            status.text = "Hãy chọn một giọng VieNeu đã sẵn sàng."
             return
+        }
+        val referencePath = when (voice.source) {
+            VoiceCatalogSource.PRESET -> ""
+            VoiceCatalogSource.SAVED -> voice.referenceFile?.takeIf { it.isFile }?.absolutePath
+                ?: run {
+                    status.text = "Giọng đã lưu bị thiếu tệp mẫu."
+                    return
+                }
         }
         val settings = currentSettings()
         setBusy(true, "Đang tạo câu nghe thử…")
@@ -248,8 +325,8 @@ class SystemVoiceSettingsActivity : Activity() {
                 VieNeuEngine.ensureInitialized(this, generationId)
                 val written = VieNeuNative.synthesize(
                     "Xin chào. Đây là giọng đọc hệ thống của VieNeu.",
-                    profile.referenceFile.absolutePath,
-                    profile.id,
+                    referencePath,
+                    voice.nativeVoiceId,
                     true,
                     false,
                     "",
@@ -257,7 +334,7 @@ class SystemVoiceSettingsActivity : Activity() {
                 ) ?: throw IllegalStateException(
                     VieNeuNative.lastError().ifBlank { "Không tạo được câu nghe thử." }
                 )
-                if (written != output.absolutePath || !output.isFile) {
+                if (written != output.absolutePath || !output.isFile || output.length() <= 44L) {
                     throw IllegalStateException("VieNeu không tạo được WAV nghe thử hợp lệ.")
                 }
                 val processed = PcmAudioProcessor.process(
@@ -269,7 +346,7 @@ class SystemVoiceSettingsActivity : Activity() {
                 val bytes = WavPcmReader.toLittleEndianBytes(processed.samples)
                 runOnUiThread {
                     playPcm(processed.sampleRate, bytes)
-                    status.text = "Đang nghe thử “${profile.name}”."
+                    status.text = "Đang nghe thử “${voice.label}”."
                     setBusy(false)
                 }
             } catch (t: Throwable) {
@@ -325,12 +402,13 @@ class SystemVoiceSettingsActivity : Activity() {
         track.play()
     }
 
-    private fun setBusy(busy: Boolean, message: String? = null) {
-        saveActiveVoiceButton.isEnabled = !busy
-        deleteVoiceButton.isEnabled = !busy && profiles.isNotEmpty()
-        previewButton.isEnabled = !busy && profiles.any { it.cacheReady }
-        saveSettingsButton.isEnabled = !busy && profiles.any { it.cacheReady }
-        cancelSettingsButton.isEnabled = !busy
+    private fun setBusy(value: Boolean, message: String? = null) {
+        busy = value
+        rateSeek.isEnabled = !value
+        pitchSeek.isEnabled = !value
+        volumeSeek.isEnabled = !value
+        voiceSpinner.isEnabled = !value
+        refreshVoiceActions()
         if (message != null) status.text = message
     }
 
