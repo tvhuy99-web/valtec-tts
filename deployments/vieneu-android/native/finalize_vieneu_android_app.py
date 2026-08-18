@@ -245,6 +245,18 @@ activity_text = activity_text.replace(
 )
 activity.write_text(activity_text, encoding="utf-8")
 
+# Kotlin cannot smart-cast a mutable Activity property across the recording worker.
+# Preserve the existing recording flow while making every direct AudioRecord dereference explicit.
+activity_text = activity.read_text(encoding="utf-8")
+activity_text, recorder_direct_count = re.subn(
+    r'(?<![?\w])recorder\.',
+    'checkNotNull(recorder).',
+    activity_text,
+)
+if recorder_direct_count < 1:
+    raise RuntimeError("AudioRecord smart-cast fix: no direct recorder dereference found")
+activity.write_text(activity_text, encoding="utf-8")
+
 replace_once(
     native_kt,
     "external fun synthesize(text: String, referenceWav: String, voiceId: String, style: String, useRefCodes: Boolean, deterministic: Boolean, dialect: String, outputWav: String): String?",
@@ -297,6 +309,7 @@ required = {
         '"Bám sát mẫu (khuyến nghị)"',
         "val useRefCodes = generationMode != 1",
         'else -> "reference_codes"',
+        "checkNotNull(recorder).",
     ),
     engine_manager: (
         "object VieNeuEngine",
