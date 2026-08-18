@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+
+
+import argparse
+import contextlib
+import hashlib
+import json
+import runpy
+import subprocess
+import sys
+from pathlib import Path
+
+
+def run_checked(*args: str, cwd: Path | None = None) -> str:
+    result = subprocess.run(
+        list(args),
+        cwd=str(cwd) if cwd else None,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    return result.stdout
+
+
+def run_script(path: Path, *arguments: str) -> None:
+    saved_argv = sys.argv[:]
+    try:
+        sys.argv = [str(path), *arguments]
+        runpy.run_path(str(path), run_name="__main__")
+    finally:
+        sys.argv = saved_argv
+
+
+@contextlib.contextmanager
+def preserve_file(path: Path):
+    original = path.read_bytes()
+    try:
+        yield
+    finally:
+        path.write_bytes(original)
+
+
+def sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def verify_pinned_submodules(source: Path) -> None:
+    status = run_checked("git", "submodule", "status", "--recursive", cwd=source)
+    invalid = []
+    for line in status.splitlines():
+        if not line:
+            continue
+        prefix = line[0]
+        if prefix != " ":
+            invalid.append(line)
+    if invalid:
+        raise RuntimeError(
+            "VieNeu submodule revisions do not match the pinned gitlinks:\n" + "\n".join(invalid)
+        )
+
+
+def read_properties(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            raise RuntimeError(f"Invalid properties line in {path}: {raw!r}")
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip()
+    return values
+
+
+def normalize_changed_text(root: Path, relative_paths: list[str]) -> None:
+    for relative in relative_paths:
+        path = root / relative
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        output = []
+        for line in text.splitlines(keepends=True):
+            if line.endswith("\r\n"):
+                body, ending = line[:-2], "\r\n"
+            elif line.endswith("\n"):
+                body, ending = line[:-1], "\n"
+            elif line.endswith("\r"):
+                body, ending = line[:-1], "\r"
+            else:
+                body, ending = line, ""
+            output.append(body.rstrip(" \t") + ending)
+        normalized = "".join(output)
+        if normalized != text:
+            path.write_text(normalized, encoding="utf-8")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("source_dir")
+    parser.add_argument("android_root")
+    parser.add_argument("--expected-revision", required=True)
+    parser.add_argument("--source-diff-output", required=True)
+    parser.add_argument("--android-diff-output", required=True)
+    parser.add_argument("--manifest-output", required=True)
+    args = parser.parse_args()
+
+    source = Path(args.source_dir).resolve()
+    android_root = Path(args.android_root).resolve()
+    native_dir = Path(__file__).resolve().parent
+    repo_root = android_root.parent.parent
+
+    if not (source / ".git").exists():
+        raise RuntimeError(f"VieNeu source is not a git checkout: {source}")
+    if not (repo_root / ".git").exists():
+        raise RuntimeError(f"Android project is not inside the repository checkout: {repo_root}")
