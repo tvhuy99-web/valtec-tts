@@ -52,7 +52,7 @@ if not package_match or not manifest_match:
 
 package_id = package_match.group(1)
 manifest_sha = manifest_match.group(1).lower()
-cache_namespace = f"{package_id}-refv3-{manifest_sha[:16]}"
+cache_namespace = f"{package_id}-refv3-{manifest_sha}"
 
 replace_once(
     engine,
@@ -96,7 +96,9 @@ reference_block = f'''    private fun referenceStoreDir(): File =
                 digest.update(buffer, 0, read)
             }}
         }}
-        return digest.digest().joinToString("") {{ byte -> "%02x".format(byte) }}
+        return digest.digest().joinToString("") {{ byte ->
+            "%02x".format(byte.toInt() and 0xff)
+        }}
     }}
 
     private fun canonicalReferenceFile(hash: String): File =
@@ -282,7 +284,10 @@ regex_once(
 )
 
 activity_text = activity.read_text(encoding="utf-8")
-activity_text = activity_text.replace('"speaker_embedding_cache" to "persistent_v2"', '"speaker_embedding_cache" to "persistent_v3"')
+activity_text = activity_text.replace(
+    '"speaker_embedding_cache" to "persistent_v2"',
+    '"speaker_embedding_cache" to "persistent_v3"',
+)
 activity.write_text(activity_text, encoding="utf-8")
 
 jni_text = jni.read_text(encoding="utf-8")
@@ -298,7 +303,12 @@ replace_once(
 )
 
 checks = {
-    engine: ("kSpeakerCacheVersion = 3", "VNSPK03", ".vieneu-speaker-v3.bin"),
+    engine: (
+        "kSpeakerCacheVersion = 3",
+        "kSpeakerCacheMagic[8]",
+        "'3', '\\0'",
+        ".vieneu-speaker-v3.bin",
+    ),
     activity: (
         "MessageDigest.getInstance(\"SHA-256\")",
         cache_namespace,
