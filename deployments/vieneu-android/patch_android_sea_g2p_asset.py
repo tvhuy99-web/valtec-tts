@@ -55,7 +55,23 @@ else:
     print('Patched Android sea-g2p dictionary install')
 
 
-
 gradle = app / 'build.gradle.kts'
 if not gradle.is_file():
     raise RuntimeError(f'Missing Android Gradle file: {gradle}')
+
+# Emit the exact generated Kotlin source around AudioRecord usage immediately before Gradle compiles it.
+activity = app / 'src/main/java/com/vieneu/voiceclone/MainActivity.kt'
+if activity.is_file():
+    activity_lines = activity.read_text(encoding='utf-8').splitlines()
+    recorder_lines = [index for index, line in enumerate(activity_lines) if 'recorder' in line or 'AudioRecord' in line]
+    if recorder_lines:
+        print('Generated MainActivity AudioRecord context:')
+        emitted = set()
+        for index in recorder_lines:
+            for context_index in range(max(0, index - 3), min(len(activity_lines), index + 4)):
+                if context_index in emitted:
+                    continue
+                emitted.add(context_index)
+                print(f'MainActivity.kt:{context_index + 1}: {activity_lines[context_index]}')
+    else:
+        print('Generated MainActivity contains no recorder or AudioRecord references before Gradle build')
