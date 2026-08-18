@@ -81,6 +81,8 @@ def main() -> None:
 
     v092_source_script = native_dir / "optimize_vieneu_android_v092_source.py"
     v092_android_script = native_dir / "optimize_vieneu_android_v092_android.py"
+    v092_source_original = v092_source_script.read_bytes()
+    v092_android_original = v092_android_script.read_bytes()
 
     run_script(native_dir / "instrument_vieneu_diagnostics.py", str(source))
     run_script(native_dir / "optimize_vieneu_android.py", str(source))
@@ -100,11 +102,17 @@ def main() -> None:
     run_script(native_dir / "patch_llama_opencl_qcom_shuffle.py", str(source))
     run_script(native_dir / "optimize_vieneu_android_cache_v3.py", str(source), str(android_root))
 
+    if v092_source_script.read_bytes() != v092_source_original:
+        raise RuntimeError("v092 source patch driver was not restored after materialization")
+    if v092_android_script.read_bytes() != v092_android_original:
+        raise RuntimeError("v092 Android patch driver was not restored after materialization")
+
     run_checked("git", "diff", "--check", cwd=source)
+    run_checked("git", "submodule", "foreach", "--recursive", "git diff --check", cwd=source)
     run_checked("git", "diff", "--check", "--", "deployments/vieneu-android", cwd=repo_root)
 
     source_patch = subprocess.run(
-        ["git", "diff", "--binary", "--no-ext-diff"],
+        ["git", "diff", "--binary", "--no-ext-diff", "--submodule=diff"],
         cwd=str(source),
         check=True,
         stdout=subprocess.PIPE,
@@ -140,7 +148,13 @@ def main() -> None:
 
     source_files = [
         line.strip()
-        for line in run_checked("git", "diff", "--name-only", cwd=source).splitlines()
+        for line in run_checked(
+            "git",
+            "diff",
+            "--name-only",
+            "--submodule=diff",
+            cwd=source,
+        ).splitlines()
         if line.strip()
     ]
     android_files = [
@@ -172,11 +186,6 @@ def main() -> None:
 
     marker = source / ".vieneu-android-prepared.json"
     marker.write_text(json.dumps(manifest, sort_keys=True) + "\n", encoding="utf-8")
-
-    if v092_source_script.read_bytes() != (native_dir / "optimize_vieneu_android_v092_source.py").read_bytes():
-        raise RuntimeError("v092 source patch driver was not restored")
-    if v092_android_script.read_bytes() != (native_dir / "optimize_vieneu_android_v092_android.py").read_bytes():
-        raise RuntimeError("v092 Android patch driver was not restored")
 
     print(json.dumps(manifest, indent=2, sort_keys=True))
 
