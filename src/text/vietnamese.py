@@ -1,9 +1,10 @@
 import re
 import unicodedata
-from transformers import AutoTokenizer
-from . import punctuation, symbols
 
-# Vietnamese BERT model
+from transformers import AutoTokenizer
+
+from . import punctuation
+
 model_id = 'vinai/phobert-base-v2'
 tokenizer = None
 
@@ -13,64 +14,64 @@ def get_tokenizer():
         tokenizer = AutoTokenizer.from_pretrained(model_id)
     return tokenizer
 
-# Vietnamese IPA phoneme set based on VieNeu-TTS-140h dataset
-# These are extracted from the phonemized_text field in the dataset
+
+
 VI_IPA_CONSONANTS = [
     'b', 'c', 'd', 'f', 'g', 'h', 'j', 'k', 'l', 'm', 'n', 'p', 'r', 's', 't', 'v', 'w', 'x', 'z',
-    'ŋ',  # ng
-    'ɲ',  # nh
-    'ʈ',  # tr
-    'ɖ',  # đ
-    'tʰ', # th
-    'kʰ', # kh
-    'ʂ',  # s (southern)
-    'ɣ',  # g (southern)
-    'χ',  # x (some dialects)
+    'ŋ',
+    'ɲ',
+    'ʈ',
+    'ɖ',
+    'tʰ',
+    'kʰ',
+    'ʂ',
+    'ɣ',
+    'χ',
 ]
 
 VI_IPA_VOWELS = [
     'a', 'ă', 'â', 'e', 'ê', 'i', 'o', 'ô', 'ơ', 'u', 'ư', 'y',
-    'ə',  # ơ
-    'ɛ',  # e
-    'ɔ',  # o
-    'ɯ',  # ư
-    'ɤ',  # ơ variant
-    'ɐ',  # a short
-    'ʊ',  # u short
-    'ɪ',  # i short
-    'ʌ',  # â
-    'æ',  # a variant
+    'ə',
+    'ɛ',
+    'ɔ',
+    'ɯ',
+    'ɤ',
+    'ɐ',
+    'ʊ',
+    'ɪ',
+    'ʌ',
+    'æ',
 ]
 
-# Vietnamese tone markers (numbers 1-6 or ˈ ˌ for stress)
+
 VI_TONE_MARKERS = ['1', '2', '3', '4', '5', '6', 'ˈ', 'ˌ', 'ː']
 
-# Combined IPA symbols used in VieNeu-TTS dataset
+
 VI_IPA_SYMBOLS = [
-    # Consonants
+
     'b', 'c', 'd', 'f', 'g', 'h', 'j', 'k', 'l', 'm', 'n', 'p', 'r', 's', 't', 'v', 'w', 'x', 'z',
     'ŋ', 'ɲ', 'ʈ', 'ɖ', 'ʂ', 'ɣ', 'χ', 'ʔ',
-    # Vowels
+
     'a', 'ă', 'e', 'i', 'o', 'u', 'y',
     'ə', 'ɛ', 'ɔ', 'ɯ', 'ɤ', 'ɐ', 'ʊ', 'ɪ', 'ʌ', 'æ', 'ɑ',
-    # Special markers
+
     'ˈ', 'ˌ', 'ː',
-    # Tone numbers
+
     '1', '2', '3', '4', '5', '6',
 ]
 
 def normalize_vietnamese_text(text):
     """Normalize Vietnamese text."""
-    # Normalize unicode
+
     text = unicodedata.normalize('NFC', text)
-    
-    # Remove extra whitespace
+
+
     text = re.sub(r'\s+', ' ', text)
     text = text.strip()
-    
-    # Convert numbers to words (basic)
+
+
     text = convert_numbers_to_vietnamese(text)
-    
+
     return text
 
 def convert_numbers_to_vietnamese(text):
@@ -80,15 +81,15 @@ def convert_numbers_to_vietnamese(text):
         '5': 'năm', '6': 'sáu', '7': 'bảy', '8': 'tám', '9': 'chín',
         '10': 'mười', '100': 'trăm', '1000': 'nghìn'
     }
-    
-    # Simple replacement for single digits in context
+
+
     def replace_num(match):
         num = match.group(0)
         if num in num_map:
             return num_map[num]
         return num
-    
-    # Only replace standalone numbers
+
+
     text = re.sub(r'\b\d\b', replace_num, text)
     return text
 
@@ -106,65 +107,63 @@ def parse_ipa_phonemes(phonemized_text):
     phones = []
     tones = []
     word2ph = []
-    
-    # Split by space to get words
+
+
     words = phonemized_text.strip().split()
-    
+
     for word in words:
         word_phones = []
-        word_tones = []
-        
-        # Parse each character/symbol in the word
+
+
         i = 0
-        current_tone = 0  # Default tone (neutral/tone 1)
-        
+        current_tone = 0
+
         while i < len(word):
             char = word[i]
-            
-            # Check for tone numbers (1-6)
+
+
             if char.isdigit():
                 current_tone = int(char)
                 i += 1
                 continue
-            
-            # Check for stress markers
+
+
             if char in ['ˈ', 'ˌ']:
-                # Primary or secondary stress - could be used as tone variant
+
                 i += 1
                 continue
-            
-            # Check for length marker
+
+
             if char == 'ː':
-                # Long vowel marker - append to previous phone if exists
+
                 if word_phones:
                     word_phones[-1] = word_phones[-1] + 'ː'
                 i += 1
                 continue
-            
-            # Check for punctuation
+
+
             if char in punctuation:
                 if word_phones:
                     phones.extend(word_phones)
                     tones.extend([current_tone] * len(word_phones))
                     word2ph.append(len(word_phones))
                     word_phones = []
-                    word_tones = []
                 phones.append(char)
                 tones.append(0)
                 word2ph.append(1)
                 i += 1
                 continue
-            
-            # Regular phoneme
+
+
             word_phones.append(char)
             i += 1
-        
-        # Apply collected tone to all phones in this word
+
+
         if word_phones:
             phones.extend(word_phones)
             tones.extend([current_tone] * len(word_phones))
             word2ph.append(len(word_phones))
-    
+
     return phones, tones, word2ph
 
 def g2p_ipa(text):
@@ -178,14 +177,14 @@ def g2p_ipa(text):
         phonemized = vi2ipa(text)
         phones, tones, word2ph = parse_ipa_phonemes(phonemized)
     except ImportError:
-        # Fallback: use character-based representation
+
         phones, tones, word2ph = g2p_char_based(text)
-    
-    # Add start and end tokens
+
+
     phones = ["_"] + phones + ["_"]
     tones = [0] + tones + [0]
     word2ph = [1] + word2ph + [1]
-    
+
     return phones, tones, word2ph
 
 def g2p_char_based(text):
@@ -195,38 +194,38 @@ def g2p_char_based(text):
     phones = []
     tones = []
     word2ph = []
-    
-    # Vietnamese tone marks to tone number mapping
+
+
     tone_marks = {
-        '\u0300': 2,  # à - huyền
-        '\u0301': 1,  # á - sắc  
-        '\u0303': 3,  # ã - ngã
-        '\u0309': 4,  # ả - hỏi
-        '\u0323': 5,  # ạ - nặng
+        '\u0300': 2,
+        '\u0301': 1,
+        '\u0303': 3,
+        '\u0309': 4,
+        '\u0323': 5,
     }
-    
-    # Vietnamese character to IPA mapping (COMPREHENSIVE - matching training data)
-    # Multi-char outputs are split into lists to avoid KeyError for missing multi-char symbols
+
+
+
     vi_to_ipa = {
-        # Multi-char consonants (check these first - ORDER MATTERS)
+
         'ngh': 'ŋ',
         'ng': 'ŋ',
         'nh': 'ɲ',
-        'ch': ['t', 'ʃ'],  # Vietnamese ch = IPA t + ʃ (separated in training data)
-        'tr': 'ʈ',   # retroflex
-        'th': ['t', 'h'],   # aspirated th
+        'ch': ['t', 'ʃ'],
+        'tr': 'ʈ',
+        'th': ['t', 'h'],
         'ph': 'f',
-        'kh': 'x',   # Vietnamese 'kh' = IPA 'x' (matches training data)
+        'kh': 'x',
         'gh': 'ɣ',
         'gi': 'z',
-        'qu': 'kw',   # qu -> kw (single symbol in training data)
-        # Special Vietnamese consonants
-        'đ': 'ɗ',    # implosive d
-        # Basic consonants that need IPA mapping
-        'x': 's',    # Vietnamese 'x' = IPA 's'
-        'c': 'k',    # Vietnamese 'c' = IPA 'k'
-        'd': 'z',    # Vietnamese 'd' (northern) = 'z'
-        'r': 'ɹ',    # Vietnamese 'r' = IPA 'ɹ' (matches training data)
+        'qu': 'kw',
+
+        'đ': 'ɗ',
+
+        'x': 's',
+        'c': 'k',
+        'd': 'z',
+        'r': 'ɹ',
         's': 's',
         'b': 'b',
         'g': 'ɣ',
@@ -241,38 +240,38 @@ def g2p_char_based(text):
         'f': 'f',
         'j': 'j',
         'w': 'w',
-        'y': 'j',    # Vietnamese 'y' = IPA 'j' (matches training data)
-        # Vowels - MUST match training data phonemes exactly!
-        'a': 'aː',   # Long 'a' (matches training: aː)
-        'ă': 'a',    # Short 'a' 
-        'â': 'ə',    # schwa
-        'e': 'ɛ',    # open-mid (matches training: ɛ)
-        'ê': 'e',    # close-mid
+        'y': 'j',
+
+        'a': 'aː',
+        'ă': 'a',
+        'â': 'ə',
+        'e': 'ɛ',
+        'ê': 'e',
         'i': 'i',
-        'o': 'ɔ',    # open-mid back (matches training: ɔ)
-        'ô': 'o',    # close-mid back
-        'ơ': 'əː',   # long schwa
+        'o': 'ɔ',
+        'ô': 'o',
+        'ơ': 'əː',
         'u': 'u',
-        'ư': 'ɯ',    # close back unrounded
+        'ư': 'ɯ',
     }
-    
+
     words = text.split()
     for word in words:
-        # Decompose to separate base char and tone mark
+
         decomposed = unicodedata.normalize('NFD', word)
         word_phones = []
         current_tone = 0
-        
+
         i = 0
         chars = list(decomposed)
         while i < len(chars):
             char = chars[i]
-            
+
             if char in tone_marks:
                 current_tone = tone_marks[char]
                 i += 1
                 continue
-            
+
             if char in punctuation:
                 if word_phones:
                     phones.extend(word_phones)
@@ -285,16 +284,16 @@ def g2p_char_based(text):
                 current_tone = 0
                 i += 1
                 continue
-            
+
             if unicodedata.combining(char):
                 i += 1
                 continue
-            
-            # Check for multi-char sequences (digraphs/trigraphs)
+
+
             lower_char = char.lower()
             matched = False
-            
-            # Try trigraphs first
+
+
             if i + 2 < len(chars):
                 trigraph = (lower_char + chars[i+1].lower() + chars[i+2].lower())
                 if trigraph in vi_to_ipa:
@@ -305,8 +304,8 @@ def g2p_char_based(text):
                         word_phones.append(result)
                     i += 3
                     matched = True
-            
-            # Try digraphs
+
+
             if not matched and i + 1 < len(chars):
                 digraph = lower_char + chars[i+1].lower()
                 if digraph in vi_to_ipa:
@@ -317,8 +316,8 @@ def g2p_char_based(text):
                         word_phones.append(result)
                     i += 2
                     matched = True
-            
-            # Single char
+
+
             if not matched:
                 if lower_char in vi_to_ipa:
                     result = vi_to_ipa[lower_char]
@@ -329,17 +328,17 @@ def g2p_char_based(text):
                 else:
                     word_phones.append(lower_char)
                 i += 1
-        
+
         if word_phones:
             phones.extend(word_phones)
             tones.extend([current_tone] * len(word_phones))
             word2ph.append(len(word_phones))
-    
-    # Add boundary tokens
+
+
     phones = ["_"] + phones + ["_"]
     tones = [0] + tones + [0]
     word2ph = [1] + word2ph + [1]
-    
+
     return phones, tones, word2ph
 
 def g2p(text):
@@ -349,21 +348,21 @@ def g2p(text):
     """
     tok = get_tokenizer()
     norm_text = text_normalize(text)
-    
-    # Tokenize for BERT alignment
+
+
     tokenized = tok.tokenize(norm_text)
-    
-    # Use character-based G2P with IPA mapping
+
+
     phones, tones, word2ph = g2p_char_based(norm_text)
-    
-    # Ensure word2ph aligns with tokenized output
-    # PhoBERT uses subword tokenization, so we need to distribute phones
-    if len(word2ph) != len(tokenized) + 2:  # +2 for start/end tokens
-        # Redistribute word2ph to match tokenized length
+
+
+
+    if len(word2ph) != len(tokenized) + 2:
+
         total_phones = sum(word2ph)
         new_word2ph = distribute_phones(total_phones, len(tokenized))
         word2ph = [1] + new_word2ph + [1]
-    
+
     return phones, tones, word2ph
 
 def g2p_with_phonemes(text, phonemized_text):
@@ -372,25 +371,25 @@ def g2p_with_phonemes(text, phonemized_text):
     This is the recommended method for training.
     """
     tok = get_tokenizer()
-    
-    # Parse IPA phonemes
+
+
     phones, tones, word2ph = parse_ipa_phonemes(phonemized_text)
-    
-    # Add boundary tokens
+
+
     phones = ["_"] + phones + ["_"]
     tones = [0] + tones + [0]
-    
-    # Get tokenized text for BERT alignment
+
+
     tokenized = tok.tokenize(text)
-    
-    # Distribute word2ph to match tokenized output + boundaries
+
+
     if word2ph:
         total_phones = sum(word2ph)
         new_word2ph = distribute_phones(total_phones, len(tokenized))
         word2ph = [1] + new_word2ph + [1]
     else:
         word2ph = [1] + [1] * len(tokenized) + [1]
-    
+
     return phones, tones, word2ph
 
 def distribute_phones(n_phone, n_word):
@@ -410,20 +409,20 @@ def get_bert_feature(text, word2ph, device='cuda'):
 
 
 if __name__ == "__main__":
-    # Test
+
     test_text = "Xin chào, tôi là một trợ lý AI."
     test_phonemes = "sˈin tʂˈaːw, tˈoj lˈaː2 mˈo6t tʂˈɤ4 lˈi4 ˌaːˈi."
-    
+
     print("Test text:", test_text)
     print("Normalized:", text_normalize(test_text))
-    
-    # Test with phonemes
+
+
     phones, tones, word2ph = g2p_with_phonemes(test_text, test_phonemes)
     print("Phones:", phones)
     print("Tones:", tones)
     print("Word2Ph:", word2ph)
-    
-    # Test without phonemes
+
+
     phones2, tones2, word2ph2 = g2p(test_text)
     print("\nChar-based phones:", phones2)
     print("Char-based tones:", tones2)

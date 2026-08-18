@@ -26,8 +26,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# Apply Android-only hot-path patches to the pinned upstream checkout after
-# diagnostics instrumentation and before VieNeu targets are configured.
+
+
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 execute_process(
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/optimize_vieneu_android.py" "${VIENEU_SOURCE_DIR}"
@@ -40,9 +40,9 @@ if(NOT VIENEU_ANDROID_OPT_RESULT EQUAL 0)
 endif()
 message(STATUS "${VIENEU_ANDROID_OPT_STDOUT}")
 
-# Keep ORT's CPU arena enabled during inference for speed, but request shrinkage
-# after the speaker-encoder and MOSS codec runs so large mobile workspaces are
-# not retained for the lifetime of the process.
+
+
+
 execute_process(
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/optimize_vieneu_android_memory.py" "${VIENEU_SOURCE_DIR}"
     RESULT_VARIABLE VIENEU_ANDROID_MEMORY_OPT_RESULT
@@ -54,8 +54,8 @@ if(NOT VIENEU_ANDROID_MEMORY_OPT_RESULT EQUAL 0)
 endif()
 message(STATUS "${VIENEU_ANDROID_MEMORY_OPT_STDOUT}")
 
-# Convert acoustic QKV/O-projection weights to FP16 before replacing the CPU
-# graph wrappers with OpenCL-resident buffers.
+
+
 execute_process(
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/optimize_vieneu_android_acoustic_f16.py" "${VIENEU_SOURCE_DIR}"
     RESULT_VARIABLE VIENEU_ANDROID_ACOUSTIC_F16_RESULT
@@ -67,8 +67,8 @@ if(NOT VIENEU_ANDROID_ACOUSTIC_F16_RESULT EQUAL 0)
 endif()
 message(STATUS "${VIENEU_ANDROID_ACOUSTIC_F16_STDOUT}")
 
-# The upstream acoustic code accepts a backend but discards it. Replace the
-# projection, fused-FFN and sampling-head graphs with OpenCL-resident buffers.
+
+
 execute_process(
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/optimize_vieneu_android_acoustic_opencl.py" "${VIENEU_SOURCE_DIR}"
     RESULT_VARIABLE VIENEU_ANDROID_ACOUSTIC_OPENCL_RESULT
@@ -80,8 +80,8 @@ if(NOT VIENEU_ANDROID_ACOUSTIC_OPENCL_RESULT EQUAL 0)
 endif()
 message(STATUS "${VIENEU_ANDROID_ACOUSTIC_OPENCL_STDOUT}")
 
-# Replace the acoustic FFN Q8 weights with FP16. Q8 errors compound across
-# autoregressive frames and caused longer Vietnamese phrases to become gibberish.
+
+
 execute_process(
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/optimize_vieneu_android_acoustic_quality.py" "${VIENEU_SOURCE_DIR}"
     RESULT_VARIABLE VIENEU_ANDROID_ACOUSTIC_QUALITY_RESULT
@@ -93,8 +93,8 @@ if(NOT VIENEU_ANDROID_ACOUSTIC_QUALITY_RESULT EQUAL 0)
 endif()
 message(STATUS "${VIENEU_ANDROID_ACOUSTIC_QUALITY_STDOUT}")
 
-# Reset the random sampler from a stable prompt hash for each utterance so the
-# same sentence no longer produces unrelated lengths based on prior requests.
+
+
 execute_process(
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/optimize_vieneu_android_generation_quality.py" "${VIENEU_SOURCE_DIR}"
     RESULT_VARIABLE VIENEU_ANDROID_GENERATION_QUALITY_RESULT
@@ -128,8 +128,8 @@ if(NOT VIENEU_ANDROID_OPENCL_RUNTIME_RESULT EQUAL 0)
 endif()
 message(STATUS "${VIENEU_ANDROID_OPENCL_RUNTIME_STDOUT}")
 
-# Fix every embedded kernel for Qualcomm drivers that expose only the
-# cl_qcom_subgroup_shuffle builtin names.
+
+
 execute_process(
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/patch_llama_opencl_qcom_shuffle.py" "${VIENEU_SOURCE_DIR}"
     RESULT_VARIABLE VIENEU_ANDROID_QCOM_SHUFFLE_RESULT
@@ -141,10 +141,10 @@ if(NOT VIENEU_ANDROID_QCOM_SHUFFLE_RESULT EQUAL 0)
 endif()
 message(STATUS "${VIENEU_ANDROID_QCOM_SHUFFLE_STDOUT}")
 
-# VieNeu upstream does not expose 'opencl' as a VIENEU_NATIVE_BACKEND selector.
-# Keep its portable CPU backend compiled only for small scalar/scheduler glue,
-# while all dominant semantic and acoustic matrix graphs use OpenCL. There is
-# no automatic whole-model or acoustic-hot-path CPU fallback.
+
+
+
+
 set(VIENEU_PORTABLE_CPU ON CACHE BOOL "" FORCE)
 set(GGML_CPU_ARM_ARCH "armv8.2-a+dotprod+fp16" CACHE STRING "" FORCE)
 set(VIENEU_NATIVE_BACKEND cpu CACHE STRING "" FORCE)
@@ -152,8 +152,8 @@ set(GGML_OPENCL ON CACHE BOOL "" FORCE)
 set(GGML_OPENCL_EMBED_KERNELS ON CACHE BOOL "" FORCE)
 set(GGML_OPENCL_USE_ADRENO_KERNELS ON CACHE BOOL "" FORCE)
 set(GGML_OPENCL_PROFILING OFF CACHE BOOL "" FORCE)
-# sea-g2p is cross-compiled explicitly by CI and linked below. Leave the
-# upstream host-Cargo build disabled because it cannot target Android correctly.
+
+
 set(VIENEU_SEA_G2P OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
@@ -172,14 +172,14 @@ endif()
 add_library(vieneu-sea-g2p-android SHARED IMPORTED GLOBAL)
 set_target_properties(vieneu-sea-g2p-android PROPERTIES
     IMPORTED_LOCATION "${SEA_G2P_LIBRARY}"
-    # Rust's Android cdylib has no DT_SONAME by default. Tell CMake to link it
-    # with -lsea_g2p_rs instead of embedding the absolute CI workspace path in
-    # DT_NEEDED, which Android's linker namespace cannot resolve.
+
+
+
     IMPORTED_NO_SONAME TRUE
     INTERFACE_INCLUDE_DIRECTORIES "${SEA_G2P_INCLUDE_DIR}"
 )
 
-# Runtime patches directly call the OpenCL backend API and native sea-g2p.
+
 target_include_directories(vieneu-tts-core PRIVATE
     "${VIENEU_SOURCE_DIR}/third_party/llama.cpp/ggml/include"
     "${SEA_G2P_INCLUDE_DIR}"

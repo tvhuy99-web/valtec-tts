@@ -94,8 +94,8 @@ def rawify_replacement_literals(source: str, script_name: str) -> str:
             raise RuntimeError(f'{script_name}:{replacement.lineno}: malformed replacement literal')
         body = token_source[match.end():-len(delimiter)]
 
-        # A real newline means the snippet's C++ structure is already encoded
-        # literally. Raw mode is then safe and required to retain C++ escapes.
+
+
         if 'r' not in prefix and '\n' in body:
             insertions.append(start)
 

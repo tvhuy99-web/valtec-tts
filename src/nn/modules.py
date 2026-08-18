@@ -1,15 +1,15 @@
 import math
+
 import torch
 from torch import nn
-from torch.nn import functional as F
-
 from torch.nn import Conv1d
-from torch.nn.utils import weight_norm, remove_weight_norm
+from torch.nn import functional as F
+from torch.nn.utils import remove_weight_norm, weight_norm
 
 from . import commons
-from .commons import init_weights, get_padding
-from .transforms import piecewise_rational_quadratic_transform
 from .attentions import Encoder
+from .commons import get_padding, init_weights
+from .transforms import piecewise_rational_quadratic_transform
 
 LRELU_SLOPE = 0.1
 
@@ -172,7 +172,7 @@ class WN(torch.nn.Module):
             in_layer = torch.nn.utils.weight_norm(in_layer, name="weight")
             self.in_layers.append(in_layer)
 
-            # last one is not necessary
+
             if i < n_layers - 1:
                 res_skip_channels = 2 * hidden_channels
             else:
@@ -490,30 +490,13 @@ class ConvFlow(nn.Module):
         h = self.proj(h) * x_mask
 
         b, c, t = x0.shape
-        h = h.reshape(b, c, -1, t).permute(0, 1, 3, 2)  # [b, cx?, t] -> [b, c, t, ?]
+        h = h.reshape(b, c, -1, t).permute(0, 1, 3, 2)
 
         unnormalized_widths = h[..., : self.num_bins] / math.sqrt(self.filter_channels)
         unnormalized_heights = h[..., self.num_bins : 2 * self.num_bins] / math.sqrt(
             self.filter_channels
         )
         unnormalized_derivatives = h[..., 2 * self.num_bins :]
-
-        x1, logabsdet = piecewise_rational_quadratic_transform(
-            x1,
-            unnormalized_widths,
-            unnormalized_heights,
-            unnormalized_derivatives,
-            inverse=reverse,
-            tails="linear",
-            tail_bound=self.tail_bound,
-        )
-
-        x = torch.cat([x0, x1], 1) * x_mask
-        logdet = torch.sum(logabsdet * x_mask, [1, 2])
-        if not reverse:
-            return x, logdet
-        else:
-            return x
 
 
 class TransformerCouplingLayer(nn.Module):
@@ -578,21 +561,4 @@ class TransformerCouplingLayer(nn.Module):
         else:
             x1 = (x1 - m) * torch.exp(-logs) * x_mask
             x = torch.cat([x0, x1], 1)
-            return x
-
-        x1, logabsdet = piecewise_rational_quadratic_transform(
-            x1,
-            unnormalized_widths,
-            unnormalized_heights,
-            unnormalized_derivatives,
-            inverse=reverse,
-            tails="linear",
-            tail_bound=self.tail_bound,
-        )
-
-        x = torch.cat([x0, x1], 1) * x_mask
-        logdet = torch.sum(logabsdet * x_mask, [1, 2])
-        if not reverse:
-            return x, logdet
-        else:
             return x

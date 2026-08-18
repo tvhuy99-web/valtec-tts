@@ -110,7 +110,7 @@ onnx_models/
 ## Performance
 
 | Device | Realtime Factor | Memory Usage |
-|--------|-----------------|--------------| 
+|--------|-----------------|--------------|
 | CPU (Intel i7) | ~3x realtime | ~500MB |
 | GPU (RTX 3060) | ~15x realtime | ~1GB |
 | Raspberry Pi 4 | ~0.5x realtime | ~300MB |
@@ -134,11 +134,11 @@ tts = VietnameTTSEdge()  # Auto-downloads models
 def synthesize():
     text = request.json.get('text', '')
     audio, sr = tts.synthesize(text)
-    
+
     buffer = io.BytesIO()
     sf.write(buffer, audio, sr, format='WAV')
     buffer.seek(0)
-    
+
     return send_file(buffer, mimetype='audio/wav')
 
 if __name__ == '__main__':

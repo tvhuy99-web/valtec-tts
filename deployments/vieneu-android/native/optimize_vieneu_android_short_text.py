@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Generate Android voice UI, EOS handling and VieNeu 0.9.3 quality modes."""
 
-from pathlib import Path
 import runpy
 import sys
+from pathlib import Path
 
 if len(sys.argv) != 2:
     raise SystemExit("usage: optimize_vieneu_android_short_text.py <vieneu-jni.cpp>")
@@ -22,7 +22,7 @@ def run_script(path: Path, *arguments: str) -> None:
         sys.argv = saved_argv
 
 
-run_script(android_root / "patch_android_preset_voices.py", str(android_root))
+run_script(android_root / "patch_android_preset_voices_base.py", str(android_root))
 run_script(native_dir / "optimize_vieneu_android_short_text_base.py", str(jni_path))
 
 text = jni_path.read_text(encoding="utf-8")

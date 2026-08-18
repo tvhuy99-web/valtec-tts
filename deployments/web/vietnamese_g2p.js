@@ -1,7 +1,7 @@
 /**
  * Vietnamese Grapheme-to-Phoneme (G2P) Converter for Browser
  * Ported from viphoneme library (https://github.com/v-nhandt21/Viphoneme)
- * 
+ *
  * This implements the full Vietnamese phonemizer logic including:
  * - Onset detection (trigraphs like 'ngh', digraphs like 'ng', 'nh', 'ch')
  * - Nucleus (vowel) conversion with diphthongs
@@ -275,7 +275,7 @@ function trans(word) {
 
 /**
  * Convert a word to IPA string
- * @param {string} word 
+ * @param {string} word
  * @returns {string} IPA representation with tone
  */
 function wordToIPA(word) {

@@ -3,18 +3,15 @@ Encoder modules for zero-shot voice cloning.
 Includes H/ASP Speaker Encoder, Style Encoder (AdaIN), and Prosody Predictor.
 """
 
-import os
 import math
+import os
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchaudio
 import torchaudio.transforms as T
 from torch.nn.utils import weight_norm
 
-# ============================================================================
-# Style Encoder (originally from adain.py)
-# ============================================================================
 
 class LearnedDownSample(nn.Module):
     def __init__(self, layer_type, dim_in):
@@ -123,9 +120,9 @@ class StyleEncoder(nn.Module):
         return s
 
 
-# ============================================================================
-# Speaker Encoder (H/ASP)
-# ============================================================================
+
+
+
 
 class SEBlock(nn.Module):
     def __init__(self, channels, reduction=8):
@@ -138,7 +135,7 @@ class SEBlock(nn.Module):
         )
 
     def forward(self, x):
-        b, c, h, w = x.size()
+        b, c, _, _ = x.size()
         y = x.view(b, c, -1).mean(dim=2)
         y = self.fc(y)
         y = y.view(b, c, 1, 1)
@@ -293,7 +290,7 @@ class SpeakerEncoder(nn.Module):
                 param.requires_grad = False
 
     def _load_pretrained(self):
-        # Local cache directory within the project
+
         project_root = os.getcwd()
         cache_dir = os.path.join(project_root, "pretrained", "hasp")
         os.makedirs(cache_dir, exist_ok=True)
@@ -323,7 +320,7 @@ class SpeakerEncoder(nn.Module):
                 state_dict = checkpoint['state_dict']
             else:
                 state_dict = checkpoint
-            
+
             state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
             self.model.load_state_dict(state_dict, strict=False)
             print("[SpeakerEncoder] ✓ Loaded pretrained weights")
@@ -359,9 +356,9 @@ class SpeakerEncoder(nn.Module):
         return emb
 
 
-# ============================================================================
-# Prosody Predictor
-# ============================================================================
+
+
+
 
 class UpSample1d(nn.Module):
     def __init__(self, layer_type):
@@ -405,7 +402,7 @@ class AdainResBlk1d(nn.Module):
             self.pool = nn.Identity()
         else:
             self.pool = weight_norm(nn.ConvTranspose1d(
-                dim_in, dim_in, kernel_size=3, stride=2, 
+                dim_in, dim_in, kernel_size=3, stride=2,
                 groups=dim_in, padding=1, output_padding=1))
 
     def _build_weights(self, dim_in, dim_out, style_dim):
@@ -443,7 +440,7 @@ class ProsodyPredictor(nn.Module):
 
         self.text_proj = nn.Conv1d(text_dim, d_hid, 1)
 
-        self.shared = nn.LSTM(d_hid + style_dim, d_hid // 2, 1, 
+        self.shared = nn.LSTM(d_hid + style_dim, d_hid // 2, 1,
                               batch_first=True, bidirectional=True)
 
         self.F0 = nn.ModuleList()
@@ -461,23 +458,23 @@ class ProsodyPredictor(nn.Module):
 
     def forward(self, x, s, input_lengths=None):
         if x.dim() == 2:
-             # If just [B, D], unsqueeze dim 2? No, error said [B, C, T]
+
              raise ValueError("ProsodyPredictor expects text features [B, C, T], got [B, D].")
 
-        # Project text features
-        x = self.text_proj(x)
-        x = x.transpose(1, 2)  # [B, T, d_hid]
 
-        # Expand style
-        s_expanded = s.unsqueeze(1).expand(-1, x.shape[1], -1)  # [B, T, style_dim]
-        
-        # Concat text + style
+        x = self.text_proj(x)
+        x = x.transpose(1, 2)
+
+
+        s_expanded = s.unsqueeze(1).expand(-1, x.shape[1], -1)
+
+
         x_s = torch.cat([x, s_expanded], dim=-1)
 
         self.shared.flatten_parameters()
-        x_shared, _ = self.shared(x_s)  # [B, T, d_hid]
+        x_shared, _ = self.shared(x_s)
 
-        F0 = x_shared.transpose(1, 2)  # [B, d_hid, T]
+        F0 = x_shared.transpose(1, 2)
         N = x_shared.transpose(1, 2)
 
         for block in self.F0:

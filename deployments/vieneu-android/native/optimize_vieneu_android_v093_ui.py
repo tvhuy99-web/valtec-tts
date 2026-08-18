@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Fix diagnostics clearing and remove redundant UI notes for VieNeu 0.9.3."""
 
-from pathlib import Path
 import sys
+from pathlib import Path
 
 if len(sys.argv) != 2:
     raise SystemExit("usage: optimize_vieneu_android_v093_ui.py <android-root>")

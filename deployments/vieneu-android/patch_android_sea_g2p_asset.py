@@ -54,8 +54,8 @@ else:
     path.write_text(text.replace(old, new, 1), encoding='utf-8')
     print('Patched Android sea-g2p dictionary install')
 
-# Versioning is owned by app/build.gradle.kts. Do not rewrite it here: this
-# build-time asset patch used to pin an obsolete version and broke newer builds.
+
+
 gradle = app / 'build.gradle.kts'
 if not gradle.is_file():
     raise RuntimeError(f'Missing Android Gradle file: {gradle}')

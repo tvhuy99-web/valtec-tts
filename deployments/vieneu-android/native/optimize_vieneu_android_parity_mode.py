@@ -7,8 +7,8 @@ available for reproducible frame/code diagnostics. Acoustic and semantic matrix
 hot paths run on OpenCL with original F32 acoustic weights.
 """
 
-from pathlib import Path
 import sys
+from pathlib import Path
 
 if len(sys.argv) != 2:
     raise SystemExit("usage: optimize_vieneu_android_parity_mode.py <android-root>")

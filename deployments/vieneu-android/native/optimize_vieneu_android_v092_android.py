@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Patch generated Android/JNI sources for VieNeu 0.9.2."""
 
-from pathlib import Path
 import re
 import sys
+from pathlib import Path
 
 if len(sys.argv) != 2:
     raise SystemExit("usage: optimize_vieneu_android_v092_android.py <android-root>")
@@ -32,7 +32,7 @@ def regex_once(path: Path, pattern: str, replacement: str, label: str) -> None:
     path.write_text(updated, encoding="utf-8")
 
 
-# JNI and Kotlin API.
+
 replace_once(
     native_kt,
     "external fun synthesize(text: String, referenceWav: String, voiceId: String, style: String, useRefCodes: Boolean, deterministic: Boolean): FloatArray?",
@@ -143,7 +143,7 @@ replace_once(
     "dynamic failure attempts",
 )
 
-# Android controls.
+
 replace_once(
     activity,
     '''    private lateinit var generationModeSpinner: Spinner

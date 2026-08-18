@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Patch the pinned VieNeu core for persistent speaker cache and dialect choice."""
 
-from pathlib import Path
 import re
 import sys
+from pathlib import Path
 
 if len(sys.argv) != 2:
     raise SystemExit("usage: optimize_vieneu_android_v092_source.py <vieneu-source-dir>")

@@ -1,10 +1,11 @@
+import logging
 import math
+
 import torch
 from torch import nn
 from torch.nn import functional as F
 
 from . import commons
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -266,7 +267,7 @@ class MultiHeadAttention(nn.Module):
         return x
 
     def attention(self, query, key, value, mask=None):
-        # reshape [b, d, t] -> [b, n_h, t, d_k]
+
         b, d, t_s, t_t = (*key.size(), query.size(2))
         query = query.view(b, self.n_heads, self.k_channels, t_t).transpose(2, 3)
         key = key.view(b, self.n_heads, self.k_channels, t_s).transpose(2, 3)
@@ -300,7 +301,7 @@ class MultiHeadAttention(nn.Module):
                     .tril(self.block_length)
                 )
                 scores = scores.masked_fill(block_mask == 0, -1e4)
-        p_attn = F.softmax(scores, dim=-1)  # [b, n_h, t_t, t_s]
+        p_attn = F.softmax(scores, dim=-1)
         p_attn = self.drop(p_attn)
         output = torch.matmul(p_attn, value)
         if self.window_size is not None:
@@ -313,7 +314,7 @@ class MultiHeadAttention(nn.Module):
             )
         output = (
             output.transpose(2, 3).contiguous().view(b, d, t_t)
-        )  # [b, n_h, t_t, d_k] -> [b, d, t_t]
+        )
         return output, p_attn
 
     def _matmul_with_relative_values(self, x, y):
@@ -336,7 +337,7 @@ class MultiHeadAttention(nn.Module):
 
     def _get_relative_embeddings(self, relative_embeddings, length):
         2 * self.window_size + 1
-        # Pad first before slice to avoid using cond ops.
+
         pad_length = max(length - (self.window_size + 1), 0)
         slice_start_position = max((self.window_size + 1) - length, 0)
         slice_end_position = slice_start_position + 2 * length - 1
@@ -358,16 +359,16 @@ class MultiHeadAttention(nn.Module):
         ret: [b, h, l, l]
         """
         batch, heads, length, _ = x.size()
-        # Concat columns of pad to shift from relative to absolute indexing.
+
         x = F.pad(x, commons.convert_pad_shape([[0, 0], [0, 0], [0, 0], [0, 1]]))
 
-        # Concat extra elements so to add up to shape (len+1, 2*len-1).
+
         x_flat = x.view([batch, heads, length * 2 * length])
         x_flat = F.pad(
             x_flat, commons.convert_pad_shape([[0, 0], [0, 0], [0, length - 1]])
         )
 
-        # Reshape and slice out the padded elements.
+
         x_final = x_flat.view([batch, heads, length + 1, 2 * length - 1])[
             :, :, :length, length - 1 :
         ]
@@ -379,12 +380,12 @@ class MultiHeadAttention(nn.Module):
         ret: [b, h, l, 2*l-1]
         """
         batch, heads, length, _ = x.size()
-        # pad along column
+
         x = F.pad(
             x, commons.convert_pad_shape([[0, 0], [0, 0], [0, 0], [0, length - 1]])
         )
         x_flat = x.view([batch, heads, length**2 + length * (length - 1)])
-        # add 0's in the beginning that will skew the elements after reshape
+
         x_flat = F.pad(x_flat, commons.convert_pad_shape([[0, 0], [0, 0], [length, 0]]))
         x_final = x_flat.view([batch, heads, length, 2 * length])[:, :, :, 1:]
         return x_final

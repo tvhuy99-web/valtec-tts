@@ -1,20 +1,17 @@
 import math
+
 import torch
 from torch import nn
+from torch.nn import Conv1d, Conv2d, ConvTranspose1d
 from torch.nn import functional as F
+from torch.nn.utils import remove_weight_norm, spectral_norm, weight_norm
 
-from src.nn import commons
-from src.nn import modules
-from src.nn import attentions
-
-from torch.nn import Conv1d, ConvTranspose1d, Conv2d
-from torch.nn.utils import weight_norm, remove_weight_norm, spectral_norm
-
-from src.nn.commons import init_weights, get_padding
 from src import alignment as monotonic_align
+from src.nn import attentions, commons, modules
+from src.nn.commons import get_padding, init_weights
 
 
-class DurationDiscriminator(nn.Module):  # vits2
+class DurationDiscriminator(nn.Module):
     def __init__(
         self, in_channels, filter_channels, kernel_size, p_dropout, gin_channels=0
     ):
@@ -165,7 +162,7 @@ class StochasticDurationPredictor(nn.Module):
         gin_channels=0,
     ):
         super().__init__()
-        filter_channels = in_channels  # it needs to be removed from future version.
+        filter_channels = in_channels
         self.in_channels = in_channels
         self.filter_channels = filter_channels
         self.kernel_size = kernel_size
@@ -250,10 +247,10 @@ class StochasticDurationPredictor(nn.Module):
                 torch.sum(0.5 * (math.log(2 * math.pi) + (z**2)) * x_mask, [1, 2])
                 - logdet_tot
             )
-            return nll + logq  # [b]
+            return nll + logq
         else:
             flows = list(reversed(self.flows))
-            flows = flows[:-2] + [flows[-1]]  # remove a useless vflow
+            flows = flows[:-2] + [flows[-1]]
             z = (
                 torch.randn(x.size(0), 2, x.size(2)).to(device=x.device, dtype=x.dtype)
                 * noise_scale
@@ -368,8 +365,8 @@ class TextEncoder(nn.Module):
             + ja_bert_emb
         ) * math.sqrt(
             self.hidden_channels
-        )  # [b, t, h]
-        x = torch.transpose(x, 1, -1)  # [b, h, t]
+        )
+        x = torch.transpose(x, 1, -1)
         x_mask = torch.unsqueeze(commons.sequence_mask(x_lengths, x.size(2)), 1).to(
             x.dtype
         )
@@ -605,9 +602,9 @@ class DiscriminatorP(torch.nn.Module):
     def forward(self, x):
         fmap = []
 
-        # 1d to 2d
+
         b, c, t = x.shape
-        if t % self.period != 0:  # pad first
+        if t % self.period != 0:
             n_pad = self.period - (t % self.period)
             x = F.pad(x, (0, n_pad), "reflect")
             t = t + n_pad
@@ -706,7 +703,7 @@ class ReferenceEncoder(nn.Module):
             for i in range(K)
         ]
         self.convs = nn.ModuleList(convs)
-        # self.wns = nn.ModuleList([weight_norm(num_features=ref_enc_filters[i]) for i in range(K)]) # noqa: E501
+
 
         out_channels = self.calculate_channels(spec_channels, 3, 2, 1, K)
         self.gru = nn.GRU(
@@ -724,22 +721,22 @@ class ReferenceEncoder(nn.Module):
     def forward(self, inputs, mask=None):
         N = inputs.size(0)
 
-        out = inputs.view(N, 1, -1, self.spec_channels)  # [N, 1, Ty, n_freqs]
+        out = inputs.view(N, 1, -1, self.spec_channels)
         if self.layernorm is not None:
             out = self.layernorm(out)
 
         for conv in self.convs:
             out = conv(out)
-            # out = wn(out)
-            out = F.relu(out)  # [N, 128, Ty//2^K, n_mels//2^K]
 
-        out = out.transpose(1, 2)  # [N, Ty//2^K, 128, n_mels//2^K]
+            out = F.relu(out)
+
+        out = out.transpose(1, 2)
         T = out.size(1)
         N = out.size(0)
-        out = out.contiguous().view(N, T, -1)  # [N, Ty//2^K, 128*n_mels//2^K]
+        out = out.contiguous().view(N, T, -1)
 
         self.gru.flatten_parameters()
-        memory, out = self.gru(out)  # out --- [1, N, 128]
+        _, out = self.gru(out)
 
         return self.proj(out.squeeze(0))
 
@@ -887,7 +884,7 @@ class SynthesizerTrn(nn.Module):
 
     def forward(self, x, x_lengths, y, y_lengths, sid, tone, language, bert, ja_bert):
         if self.n_speakers > 0:
-            g = self.emb_g(sid).unsqueeze(-1)  # [b, h, 1]
+            g = self.emb_g(sid).unsqueeze(-1)
         else:
             g = self.ref_enc(y.transpose(1, 2)).unsqueeze(-1)
         if self.use_vc:
@@ -901,20 +898,20 @@ class SynthesizerTrn(nn.Module):
         z_p = self.flow(z, y_mask, g=g)
 
         with torch.no_grad():
-            # negative cross-entropy
-            s_p_sq_r = torch.exp(-2 * logs_p)  # [b, d, t]
+
+            s_p_sq_r = torch.exp(-2 * logs_p)
             neg_cent1 = torch.sum(
                 -0.5 * math.log(2 * math.pi) - logs_p, [1], keepdim=True
-            )  # [b, 1, t_s]
+            )
             neg_cent2 = torch.matmul(
                 -0.5 * (z_p**2).transpose(1, 2), s_p_sq_r
-            )  # [b, t_t, d] x [b, d, t_s] = [b, t_t, t_s]
+            )
             neg_cent3 = torch.matmul(
                 z_p.transpose(1, 2), (m_p * s_p_sq_r)
-            )  # [b, t_t, d] x [b, d, t_s] = [b, t_t, t_s]
+            )
             neg_cent4 = torch.sum(
                 -0.5 * (m_p**2) * s_p_sq_r, [1], keepdim=True
-            )  # [b, 1, t_s]
+            )
             neg_cent = neg_cent1 + neg_cent2 + neg_cent3 + neg_cent4
             if self.use_noise_scaled_mas:
                 epsilon = (
@@ -940,11 +937,11 @@ class SynthesizerTrn(nn.Module):
         logw = self.dp(x, x_mask, g=g)
         l_length_dp = torch.sum((logw - logw_) ** 2, [1, 2]) / torch.sum(
             x_mask
-        )  # for averaging
+        )
 
         l_length = l_length_dp + l_length_sdp
 
-        # expand prior
+
         m_p = torch.matmul(attn.squeeze(1), m_p.transpose(1, 2)).transpose(1, 2)
         logs_p = torch.matmul(attn.squeeze(1), logs_p.transpose(1, 2)).transpose(1, 2)
 
@@ -980,11 +977,11 @@ class SynthesizerTrn(nn.Module):
         y=None,
         g=None,
     ):
-        # x, m_p, logs_p, x_mask = self.enc_p(x, x_lengths, tone, language, bert)
-        # g = self.gst(y)
+
+
         if g is None:
             if self.n_speakers > 0:
-                g = self.emb_g(sid).unsqueeze(-1)  # [b, h, 1]
+                g = self.emb_g(sid).unsqueeze(-1)
             else:
                 g = self.ref_enc(y.transpose(1, 2)).unsqueeze(-1)
         if self.use_vc:
@@ -998,7 +995,7 @@ class SynthesizerTrn(nn.Module):
             sdp_ratio
         ) + self.dp(x, x_mask, g=g) * (1 - sdp_ratio)
         w = torch.exp(logw) * x_mask * length_scale
-        
+
         w_ceil = torch.ceil(w)
         y_lengths = torch.clamp_min(torch.sum(w_ceil, [1, 2]), 1).long()
         y_mask = torch.unsqueeze(commons.sequence_mask(y_lengths, None), 1).to(
@@ -1009,21 +1006,21 @@ class SynthesizerTrn(nn.Module):
 
         m_p = torch.matmul(attn.squeeze(1), m_p.transpose(1, 2)).transpose(
             1, 2
-        )  # [b, t', t], [b, t, d] -> [b, d, t']
+        )
         logs_p = torch.matmul(attn.squeeze(1), logs_p.transpose(1, 2)).transpose(
             1, 2
-        )  # [b, t', t], [b, t, d] -> [b, d, t']
+        )
 
         z_p = m_p + torch.randn_like(m_p) * torch.exp(logs_p) * noise_scale
         z = self.flow(z_p, y_mask, g=g, reverse=True)
         o = self.dec((z * y_mask)[:, :, :max_len], g=g)
-        # print('max/min of o:', o.max(), o.min())
+
         return o, attn, y_mask, (z, z_p, m_p, logs_p)
 
-    def voice_conversion(self, y, y_lengths, sid_src, sid_tgt, tau=1.0):        
+    def voice_conversion(self, y, y_lengths, sid_src, sid_tgt, tau=1.0):
         g_src = sid_src
         g_tgt = sid_tgt
-        z, m_q, logs_q, y_mask = self.enc_q(y, y_lengths, g=g_src, tau=tau)
+        z, _, _, y_mask = self.enc_q(y, y_lengths, g=g_src, tau=tau)
         z_p = self.flow(z, y_mask, g=g_src)
         z_hat = self.flow(z_p, y_mask, g=g_tgt, reverse=True)
         o_hat = self.dec(z_hat * y_mask, g=g_tgt)

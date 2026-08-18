@@ -1,17 +1,15 @@
-import os
-import glob
 import argparse
-import logging
+import glob
 import json
+import logging
+import os
 import subprocess
+
+import librosa
 import numpy as np
-from scipy.io.wavfile import read
 import torch
 import torchaudio
-import librosa
-from src.text import cleaned_text_to_sequence
-from src.text.cleaner import clean_text
-from src.nn import commons
+from scipy.io.wavfile import read
 
 MATPLOTLIB_FLAG = False
 
@@ -19,43 +17,6 @@ logger = logging.getLogger(__name__)
 
 
 
-def get_text_for_tts_infer(text, language_str, hps, device, symbol_to_id=None):
-    norm_text, phone, tone, word2ph = clean_text(text, language_str)
-    phone, tone, language = cleaned_text_to_sequence(phone, tone, language_str, symbol_to_id)
-
-    if hps.data.add_blank:
-        phone = commons.intersperse(phone, 0)
-        tone = commons.intersperse(tone, 0)
-        language = commons.intersperse(language, 0)
-        for i in range(len(word2ph)):
-            word2ph[i] = word2ph[i] * 2
-        word2ph[0] += 1
-
-    if getattr(hps.data, "disable_bert", False):
-        bert = torch.zeros(1024, len(phone))
-        ja_bert = torch.zeros(768, len(phone))
-    else:
-        bert = get_bert(norm_text, word2ph, language_str, device)
-        del word2ph
-        assert bert.shape[-1] == len(phone), phone
-
-        if language_str == "ZH":
-            bert = bert
-            ja_bert = torch.zeros(768, len(phone))
-        elif language_str in ["JP", "EN", "ZH_MIX_EN", 'KR', 'SP', 'ES', 'FR', 'DE', 'RU', 'VI']:
-            ja_bert = bert
-            bert = torch.zeros(1024, len(phone))
-        else:
-            raise NotImplementedError()
-
-    assert bert.shape[-1] == len(
-        phone
-    ), f"Bert seq len {bert.shape[-1]} != {len(phone)}"
-
-    phone = torch.LongTensor(phone)
-    tone = torch.LongTensor(tone)
-    language = torch.LongTensor(language)
-    return bert, ja_bert, phone, tone, language
 
 def load_checkpoint(checkpoint_path, model, optimizer=None, skip_optimizer=False):
     assert os.path.isfile(checkpoint_path)
@@ -69,7 +30,7 @@ def load_checkpoint(checkpoint_path, model, optimizer=None, skip_optimizer=False
     ):
         optimizer.load_state_dict(checkpoint_dict["optimizer"])
     elif optimizer is None and not skip_optimizer:
-        # else:      Disable this line if Infer and resume checkpoint,then enable the line upper
+
         new_opt_dict = optimizer.state_dict()
         new_opt_dict_params = new_opt_dict["param_groups"][0]["params"]
         new_opt_dict["param_groups"] = checkpoint_dict["optimizer"]["param_groups"]
@@ -85,7 +46,7 @@ def load_checkpoint(checkpoint_path, model, optimizer=None, skip_optimizer=False
     new_state_dict = {}
     for k, v in state_dict.items():
         try:
-            # assert "emb_g" not in k
+
             new_state_dict[k] = saved_state_dict[k]
             assert saved_state_dict[k].shape == v.shape, (
                 saved_state_dict[k].shape,
@@ -93,7 +54,7 @@ def load_checkpoint(checkpoint_path, model, optimizer=None, skip_optimizer=False
             )
         except Exception as e:
             print(e)
-            # For upgrading from the old version
+
             if "ja_bert_proj" in k:
                 v = torch.zeros_like(v)
                 logger.warn(
@@ -186,8 +147,6 @@ def plot_spectrogram_to_numpy(spectrogram):
             img = ((spec - vmin) / (vmax - vmin) * 255.0).clip(0, 255).astype(np.uint8)
             return np.stack([img, img, img], axis=-1)
     import matplotlib.pylab as plt
-    import numpy as np
-
     fig, ax = plt.subplots(figsize=(10, 2))
     im = ax.imshow(spectrogram, aspect="auto", origin="lower", interpolation="none")
     plt.colorbar(im, ax=ax)
@@ -196,9 +155,9 @@ def plot_spectrogram_to_numpy(spectrogram):
     plt.tight_layout()
 
     fig.canvas.draw()
-    # Use buffer_rgba() instead of deprecated tostring_rgb()
+
     buf = fig.canvas.buffer_rgba()
-    data = np.asarray(buf)[:, :, :3]  # Remove alpha channel
+    data = np.asarray(buf)[:, :, :3]
     plt.close()
     return data
 
@@ -226,8 +185,6 @@ def plot_alignment_to_numpy(alignment, info=None):
             img = ((ali - vmin) / (vmax - vmin) * 255.0).clip(0, 255).astype(np.uint8)
             return np.stack([img, img, img], axis=-1)
     import matplotlib.pylab as plt
-    import numpy as np
-
     fig, ax = plt.subplots(figsize=(6, 4))
     im = ax.imshow(
         alignment.transpose(), aspect="auto", origin="lower", interpolation="none"
@@ -241,9 +198,9 @@ def plot_alignment_to_numpy(alignment, info=None):
     plt.tight_layout()
 
     fig.canvas.draw()
-    # Use buffer_rgba() instead of deprecated tostring_rgb()
+
     buf = fig.canvas.buffer_rgba()
-    data = np.asarray(buf)[:, :, :3]  # Remove alpha channel
+    data = np.asarray(buf)[:, :, :3]
     plt.close()
     return data
 

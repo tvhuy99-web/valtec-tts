@@ -88,9 +88,9 @@ if patch_text.count(old_regex) != 1:
     raise RuntimeError('0.9.2 source patch regex helper shape changed')
 patch_text = patch_text.replace(old_regex, new_regex, 1)
 
-# optimize_vieneu_android.py already inserts sys/stat.h for its session-local
-# reference cache. Convert the v0.9.2 include edit into a strict presence check
-# rather than attempting to insert the same header twice.
+
+
+
 old_stat_patch = '''replace_once(
     engine,
     '#include <stdexcept>\\n\\n#include <nlohmann/json.hpp>\\n',

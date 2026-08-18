@@ -28,8 +28,8 @@ def replace_once(old: str, new: str, label: str) -> None:
     text = text.replace(old, new, 1)
 
 
-# The earlier Android patch passes allow_f16=true for QKV and O-projection.
-# Preserve that call ABI but force the OpenCL tensor type back to F32.
+
+
 replace_once(
     '''        use_f16_ = allow_f16;
         const ggml_type weight_type = use_f16_ ? GGML_TYPE_F16 : GGML_TYPE_F32;
@@ -41,7 +41,7 @@ replace_once(
     'force F32 acoustic linear weights',
 )
 
-# Disable FFN quantization/conversion and upload the original F32 arrays.
+
 replace_once(
     '''        use_q8_ = env_flag_enabled("VIENEU_ACOUSTIC_Q8_FFN", true);
         const int64_t q8_block = ggml_blck_size(GGML_TYPE_Q8_0);

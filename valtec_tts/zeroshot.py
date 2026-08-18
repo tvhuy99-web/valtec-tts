@@ -3,7 +3,7 @@ Valtec TTS - Zero-Shot Vietnamese Voice Cloning API
 
 Usage:
     from valtec_tts import ZeroShotTTS
-    
+
     tts = ZeroShotTTS()
     audio, sr = tts.synthesize(
         text="Xin chào các bạn",
@@ -24,7 +24,7 @@ from typing import Optional, Tuple
 import numpy as np
 
 try:
-    from huggingface_hub import hf_hub_download, snapshot_download
+    from huggingface_hub import hf_hub_download
     HF_HUB_AVAILABLE = True
 except ImportError:
     HF_HUB_AVAILABLE = False
@@ -77,7 +77,7 @@ class ZeroShotTTS:
         else:
             self.device = device
 
-        # Resolve model paths
+
         if checkpoint_path is None or config_path is None:
             model_dir = self._ensure_model_available()
             if checkpoint_path is None:
@@ -95,21 +95,21 @@ class ZeroShotTTS:
 
     def _ensure_model_available(self) -> str:
         """Check local cache or download from HuggingFace."""
-        # First check if pretrained/zeroshot exists locally (dev mode)
+
         package_root = Path(__file__).parent.parent
         local_dir = package_root / "pretrained" / "zeroshot"
         if (local_dir / "config.json").exists() and list(local_dir.glob("G_*.pth")):
             print(f"Using local model from: {local_dir}")
             return str(local_dir)
 
-        # Check cache
+
         cache_dir = _get_cache_dir()
         model_dir = cache_dir / DEFAULT_ZEROSHOT_MODEL_NAME
         if (model_dir / "config.json").exists() and list(model_dir.glob("G_*.pth")):
             print(f"Using cached model from: {model_dir}")
             return str(model_dir)
 
-        # Download
+
         print(f"Downloading zero-shot model from: {DEFAULT_ZEROSHOT_HF_REPO}")
         if not HF_HUB_AVAILABLE:
             raise RuntimeError(
@@ -125,7 +125,7 @@ class ZeroShotTTS:
                 local_dir=str(model_dir),
                 repo_type="space",
             )
-        # Also need hasp weights
+
         hasp_dir = model_dir.parent / "hasp"
         hasp_dir.mkdir(parents=True, exist_ok=True)
         if not (hasp_dir / "pytorch_model.bin").exists():
@@ -142,6 +142,7 @@ class ZeroShotTTS:
     def _load_model(self):
         """Load all model components."""
         import json
+
         import torch
         from torch import nn
 
@@ -150,8 +151,10 @@ class ZeroShotTTS:
             sys.path.insert(0, str(package_root))
 
         from src.models import (
-            SynthesizerZeroShot, SpeakerEncoder,
-            StyleEncoder, ProsodyPredictor
+            ProsodyPredictor,
+            SpeakerEncoder,
+            StyleEncoder,
+            SynthesizerZeroShot,
         )
         from src.text.symbols import symbols
 
@@ -172,13 +175,13 @@ class ZeroShotTTS:
             self.checkpoint_path, map_location=self.device, weights_only=False
         )
 
-        # Speaker Encoder
+
         self.speaker_encoder = SpeakerEncoder(
             device=self.device,
             embed_dim=getattr(self.hps.model, 'gin_channels', 512)
         )
 
-        # Style Encoder
+
         self.style_encoder = StyleEncoder(
             n_mel_channels=80, style_dim=128
         ).to(self.device).eval()
@@ -187,7 +190,7 @@ class ZeroShotTTS:
                      for k, v in checkpoint['prosody_encoder'].items()}
             self.style_encoder.load_state_dict(state)
 
-        # Prosody Predictor
+
         self.prosody_predictor = ProsodyPredictor(
             style_dim=128, d_hid=256,
             text_dim=self.hps.model.hidden_channels, dropout=0.1
@@ -197,7 +200,7 @@ class ZeroShotTTS:
                      for k, v in checkpoint['prosody_predictor'].items()}
             self.prosody_predictor.load_state_dict(state)
 
-        # Synthesizer
+
         self.model = SynthesizerZeroShot(
             n_vocab=len(symbols),
             spec_channels=self.hps.data.filter_length // 2 + 1,
@@ -238,8 +241,9 @@ class ZeroShotTTS:
 
     def extract_embeddings(self, audio_path: str):
         """Extract speaker and prosody embeddings from reference audio."""
-        import torch
         import librosa
+        import torch
+
         from src.nn.mel_processing import mel_spectrogram_torch
 
         ref_audio, ref_sr = librosa.load(audio_path, sr=None)
@@ -283,15 +287,16 @@ class ZeroShotTTS:
             Tuple of (audio_array, sample_rate)
         """
         import torch
-        from src.text import cleaned_text_to_sequence
-        from src.vietnamese.text_processor import process_vietnamese_text
-        from src.vietnamese.phonemizer import text_to_phonemes
+
         from src.nn import commons
+        from src.text import cleaned_text_to_sequence
+        from src.vietnamese.phonemizer import text_to_phonemes
+        from src.vietnamese.text_processor import process_vietnamese_text
 
         speaker_emb, prosody_emb = self.extract_embeddings(reference_audio)
 
         processed = process_vietnamese_text(text)
-        phones, tones_raw, word2ph = text_to_phonemes(processed)
+        phones, tones_raw, _ = text_to_phonemes(processed)
         phone_ids, tone_ids, language_ids = cleaned_text_to_sequence(
             phones, tones_raw, "VI"
         )

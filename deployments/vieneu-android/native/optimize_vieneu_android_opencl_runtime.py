@@ -37,9 +37,9 @@ replace_once(
     'OpenCL registration and diagnostics helper',
 )
 
-# Diagnostics instrumentation runs before this patch and inserts a stage timer
-# between model_dir_ assignment and assets_.load. Anchor to that final source
-# shape so the patch fails closed if instrumentation changes again.
+
+
+
 replace_once(
     '''        model_dir_ = init.model_dir;\n        auto t_stage = std::chrono::high_resolution_clock::now();\n        if (!assets_.load(init.model_dir, error)) return false;\n''',
     '''        model_dir_ = init.model_dir;\n        const int opencl_device_count = register_and_probe_android_opencl();\n        if (opencl_device_count <= 0) {\n            error = "OpenCL GPU backend unavailable; CPU fallback is disabled for this build";\n            return false;\n        }\n        auto t_stage = std::chrono::high_resolution_clock::now();\n        if (!assets_.load(init.model_dir, error)) return false;\n''',

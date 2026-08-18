@@ -1,4 +1,4 @@
-# Validate Dockerfile syntax
+
 with open('Dockerfile', 'r') as f:
     content = f.read()
 

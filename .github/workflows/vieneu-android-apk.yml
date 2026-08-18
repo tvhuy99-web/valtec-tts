@@ -142,10 +142,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          # We use the Khronos loader only as a build-time link library. Remove its
-          # versioned SONAME so ggml-opencl records NEEDED libOpenCL.so, matching the
-          # Qualcomm vendor library exposed by Android devices. The loader itself is
-          # intentionally NOT packaged in the APK.
           python3 - <<'PY'
           from pathlib import Path
           p = Path('.build/OpenCL-ICD-Loader/CMakeLists.txt')
@@ -258,7 +254,6 @@ jobs:
           cp "$CXX_SHARED" "$DEST/libc++_shared.so"
           cp "$OMP_SHARED" "$DEST/libomp.so"
 
-          # libOpenCL.so must come from the Qualcomm device, not from the APK.
           test ! -e "$DEST/libOpenCL.so"
 
           STRIP="$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"

@@ -12,7 +12,6 @@ echo [2/3] Dong goi phan mem thanh file EXE...
 echo (Qua trinh nay co the mat vai phut)
 echo.
 
-:: Use gui_app_modern.py (v2.0) instead of old gui_app.py
 pyinstaller --name "ValtecTTS" ^
     --windowed ^
     --onefile ^

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
-from setuptools import setup, find_packages
+
 import os
 
-# Read README for long description
+from setuptools import find_packages, setup
+
+
 def read_readme():
     readme_path = os.path.join(os.path.dirname(__file__), "README.md")
     if os.path.exists(readme_path):

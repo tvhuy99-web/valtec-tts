@@ -5,9 +5,9 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-// Stable DEBUG signing only. This mirrors NgheTruyen-Kotlin: the public repository
-// contains a dedicated debug keystore so every CI runner produces APKs signed by
-// the same certificate. Never reuse this key for a production/release package.
+
+
+
 val stableDebugKeystoreB64 = rootProject.file("../../.github/signing/vieneu-stable-debug.keystore.b64")
 val stableDebugKeystore = rootProject.file(".gradle/vieneu-stable-debug.p12")
 check(stableDebugKeystoreB64.isFile) {
@@ -51,17 +51,17 @@ android {
 
     buildTypes {
         debug {
-            // Keep the public stable-debug key isolated from any future production app.
-            // This package can coexist with the old com.vieneu.voiceclone build and all
-            // subsequent debug APKs can update it in-place.
+
+
+
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-stable-debug"
             signingConfig = signingConfigs.getByName("stableDebug")
         }
         release {
             isMinifyEnabled = false
-            // Intentionally unsigned here. A production/release build must use a private
-            // release key supplied outside the public repository.
+
+
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }

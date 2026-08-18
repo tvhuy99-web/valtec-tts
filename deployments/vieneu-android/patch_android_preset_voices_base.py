@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-from pathlib import Path
 import sys
+from pathlib import Path
 
 if len(sys.argv) != 2:
     raise SystemExit('usage: patch_android_preset_voices.py <android-dir>')
@@ -157,7 +157,7 @@ p(a,'mapOf("generation_id" to generationId, "style" to style, "text_chars" to te
 p(a,'VieNeuNative.synthesize(text, ref.absolutePath, style)','VieNeuNative.synthesize(text, referencePath, voiceId, style)')
 p(a,'''                    referenceStatus.text = "Giọng mẫu: $name (${target.length() / 1024} KB)"
                     statusText.text''', '''                    updateVoiceUi()
-                    statusText.text'')
+                    statusText.text''')
 
 p(g,'versionCode = 15\n        versionName = "0.7.1-eos-quality"','versionCode = 16\n        versionName = "0.8.0-preset-voices-early-eos"')
 for f,need in {a:['voiceSpinner','catalog.loaded','referencePath, voiceId'],k:['voiceId: String'],j:['params.voice_id','voice_mode'],x:['@+id/voiceSpinner','@+id/voiceInfo'],g:['0.8.0-preset-voices-early-eos']}.items():

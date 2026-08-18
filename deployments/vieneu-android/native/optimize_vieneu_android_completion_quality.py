@@ -8,8 +8,8 @@ through the model's EOS token and retries only when generation reaches the safet
 cap without EOS.
 """
 
-from pathlib import Path
 import sys
+from pathlib import Path
 
 if len(sys.argv) != 2:
     raise SystemExit(

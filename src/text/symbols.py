@@ -1,9 +1,9 @@
-# punctuation = ["!", "?", "…", ",", ".", "'", "-"]
+
 punctuation = ["!", "?", "…", ",", ".", "'", "-", "¿", "¡"]
 pu_symbols = punctuation + ["SP", "UNK"]
 pad = "_"
 
-# chinese
+
 zh_symbols = [
     "E",
     "En",
@@ -73,7 +73,7 @@ zh_symbols = [
 ]
 num_zh_tones = 6
 
-# japanese
+
 ja_symbols = [
     "N",
     "a",
@@ -120,7 +120,7 @@ ja_symbols = [
 ]
 num_ja_tones = 1
 
-# English
+
 en_symbols = [
     "aa",
     "ae",
@@ -164,11 +164,11 @@ en_symbols = [
 ]
 num_en_tones = 4
 
-# Korean
+
 kr_symbols = ['ᄌ', 'ᅥ', 'ᆫ', 'ᅦ', 'ᄋ', 'ᅵ', 'ᄅ', 'ᅴ', 'ᄀ', 'ᅡ', 'ᄎ', 'ᅪ', 'ᄑ', 'ᅩ', 'ᄐ', 'ᄃ', 'ᅢ', 'ᅮ', 'ᆼ', 'ᅳ', 'ᄒ', 'ᄆ', 'ᆯ', 'ᆷ', 'ᄂ', 'ᄇ', 'ᄉ', 'ᆮ', 'ᄁ', 'ᅬ', 'ᅣ', 'ᄄ', 'ᆨ', 'ᄍ', 'ᅧ', 'ᄏ', 'ᆸ', 'ᅭ', '(', 'ᄊ', ')', 'ᅲ', 'ᅨ', 'ᄈ', 'ᅱ', 'ᅯ', 'ᅫ', 'ᅰ', 'ᅤ', '~', '\\', '[', ']', '/', '^', ':', 'ㄸ', '*']
 num_kr_tones = 1
 
-# Spanish
+
 es_symbols = [
         "N",
         "Q",
@@ -229,7 +229,7 @@ es_symbols = [
     ]
 num_es_tones = 1
 
-# French 
+
 fr_symbols = [
     "\u0303",
     "œ",
@@ -242,14 +242,14 @@ fr_symbols = [
 ]
 num_fr_tones = 1
 
-# German 
+
 de_symbols = [
     "ʏ",
     "̩"
   ]
 num_de_tones = 1
 
-# Russian 
+
 ru_symbols = [
     "ɭ",
     "ʲ",
@@ -261,97 +261,97 @@ ru_symbols = [
 ]
 num_ru_tones = 1
 
-# Vietnamese (IPA-based, compatible with VieNeu-TTS-140h dataset)
+
 vi_symbols = [
-    # Consonants (simple)
-    "ʈ",   # tr
-    "ɖ",   # đ
-    "ɗ",   # implosive d (đ variant)
-    "ɓ",   # implosive b
-    "ʰ",   # aspiration marker
-    "ă",   # short a (Vietnamese)
-    "ʷ",   # labialization marker
-    "̆",    # breve diacritic
-    "͡",    # tie bar (for affricates)
-    "ʤ",   # voiced postalveolar affricate
-    "ʧ",   # voiceless postalveolar affricate
-    # Foreign/special characters found in dataset
-    "т",   # Cyrillic т
-    "輪",  # Chinese character
-    "и",   # Cyrillic и
-    "л",   # Cyrillic л
-    "р",   # Cyrillic р
-    "µ",   # micro sign
-    "ʂ",   # s (retroflex)
-    "ʐ",   # r (retroflex)
-    "ʔ",   # glottal stop
-    "ɣ",   # g (southern)
-    # Multi-char consonants (from vietnamese.py g2p)
-    "tʰ",  # th
-    "kʰ",  # kh
-    "kw",  # qu -> kw
-    "tʃ",  # ch
-    "ɹ",   # r IPA
-    # Vowels specific to Vietnamese
-    "ɤ",   # ơ
-    "ɐ",   # a short
-    "ɑ",   # a back
-    "ɨ",   # ư variant
-    "ʉ",   # u variant
-    "ɜ",   # open-mid central
-    # Long vowels (from VieNeu-TTS dataset)
-    "əː",  # schwa long
-    "aː",  # a long  
-    "ɜː",  # open-mid central long
-    "ɑː",  # open back long
-    "ɔː",  # open-mid back long
-    "iː",  # close front long
-    "uː",  # close back long
-    "eː",  # close-mid front long
-    "oː",  # close-mid back long
-    # Diphthongs and special combinations
-    "iə",  # ia/iê
-    "ɨə",  # ưa/ươ
-    "uə",  # ua/uô
-    # Additional IPA markers
-    "ˑ",   # half-long
-    "̪",    # dental diacritic
-    # Tone-related (though tones are handled separately)
-    "˥",   # tone 1 marker
-    "˩",   # tone marker
-    "˧",   # tone marker
-    "˨",   # tone marker
-    "˦",   # tone marker
-    # Numbers (found in phonemized dataset)
+
+    "ʈ",
+    "ɖ",
+    "ɗ",
+    "ɓ",
+    "ʰ",
+    "ă",
+    "ʷ",
+    "̆",
+    "͡",
+    "ʤ",
+    "ʧ",
+
+    "т",
+    "輪",
+    "и",
+    "л",
+    "р",
+    "µ",
+    "ʂ",
+    "ʐ",
+    "ʔ",
+    "ɣ",
+
+    "tʰ",
+    "kʰ",
+    "kw",
+    "tʃ",
+    "ɹ",
+
+    "ɤ",
+    "ɐ",
+    "ɑ",
+    "ɨ",
+    "ʉ",
+    "ɜ",
+
+    "əː",
+    "aː",
+    "ɜː",
+    "ɑː",
+    "ɔː",
+    "iː",
+    "uː",
+    "eː",
+    "oː",
+
+    "iə",
+    "ɨə",
+    "uə",
+
+    "ˑ",
+    "̪",
+
+    "˥",
+    "˩",
+    "˧",
+    "˨",
+    "˦",
+
     "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
-    # Special characters from dataset
+
     "$", "%", "&", "«", "»", "–", "ı",
-    # viphoneme specific symbols
-    "wʷ",  # labialized w
-    "#",   # unknown/fallback marker
-    "ô",   # Vietnamese ô (fallback)
-    "ʃ",   # voiceless postalveolar fricative
-    "ʒ",   # voiced postalveolar fricative
-    "θ",   # voiceless dental fricative
-    "ð",   # voiced dental fricative
-    "æ",   # near-open front unrounded
-    "ɪ",   # near-close front unrounded
-    "ʊ",   # near-close back rounded 
-    # Vietnamese fallback characters (when viphoneme fails to parse)
+
+    "wʷ",
+    "#",
+    "ô",
+    "ʃ",
+    "ʒ",
+    "θ",
+    "ð",
+    "æ",
+    "ɪ",
+    "ʊ",
+
     "ẩ", "ò", "à", "á", "ủ", "ờ", "ộ", "ả", "ó", "é", "ê",
     "ồ", "ấ", "ú", "ế", "ớ", "ì", "ọ", "ố", "ư", "ữ",
 ]
-num_vi_tones = 8  # 6 tones + 1 neutral + 1 extra for data compatibility
+num_vi_tones = 8
 
-# combine all symbols
+
 normal_symbols = sorted(set(zh_symbols + ja_symbols + en_symbols + kr_symbols + es_symbols + fr_symbols + de_symbols + ru_symbols + vi_symbols))
 symbols = [pad] + normal_symbols + pu_symbols
 sil_phonemes_ids = [symbols.index(i) for i in pu_symbols]
 
-# combine all tones
+
 num_tones = num_zh_tones + num_ja_tones + num_en_tones + num_kr_tones + num_es_tones + num_fr_tones + num_de_tones + num_ru_tones + num_vi_tones
 
-# language maps
+
 language_id_map = {"ZH": 0, "JP": 1, "EN": 2, "ZH_MIX_EN": 3, 'KR': 4, 'ES': 5, 'SP': 5, 'FR': 6, 'VI': 7}
 num_languages = len(language_id_map.keys())
 

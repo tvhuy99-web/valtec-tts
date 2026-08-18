@@ -150,7 +150,7 @@ void redirect_native_console(const std::string& dir) {
     if (out) std::setvbuf(stdout, nullptr, _IOLBF, 0);
     if (err) std::setvbuf(stderr, nullptr, _IOLBF, 0);
 }
-} // namespace
+}
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_vieneu_voiceclone_VieNeuNative_configureDiagnostics(
