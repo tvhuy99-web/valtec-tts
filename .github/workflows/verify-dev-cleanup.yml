@@ -1,4 +1,4 @@
-name: Verify dev cleanup APK build
+name: Retry dev cleanup APK build
 
 on:
   workflow_dispatch:
@@ -9,37 +9,39 @@ on:
       - '.github/workflows/verify-dev-cleanup.yml'
 
 permissions:
-  actions: read
+  actions: write
   contents: read
   statuses: write
 
 jobs:
-  verify:
+  retry-and-verify:
     runs-on: ubuntu-latest
     env:
       TARGET_SHA: 6736dbd5abea36ca16b43e9dc96de7d1ead36eab
+      STUCK_RUN_ID: '32087821649'
     steps:
-      - name: Find and verify canonical APK build
+      - name: Cancel stalled runner and dispatch a fresh canonical build
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          CURRENT_SHA: ${{ github.sha }}
         shell: bash
         run: |
           set -euo pipefail
-          gh api --method POST "repos/$REPO/statuses/$TARGET_SHA" \
-            -f state=pending \
-            -f context=vieneu-dev-cleanup-apk \
-            -f description='Locating canonical signed APK build'
+          gh run cancel "$STUCK_RUN_ID" --repo "$REPO" || true
+          gh workflow run vieneu-android-apk.yml --repo "$REPO" --ref dev
 
           run_id=''
           for _ in $(seq 1 120); do
             run_id="$(gh run list \
               --repo "$REPO" \
               --workflow vieneu-android-apk.yml \
-              --commit "$TARGET_SHA" \
-              --limit 1 \
-              --json databaseId \
-              --jq '.[0].databaseId // empty')"
+              --event workflow_dispatch \
+              --branch dev \
+              --limit 20 \
+              --json databaseId,headSha,event \
+              --jq ".[] | select(.headSha == \"$CURRENT_SHA\" and .event == \"workflow_dispatch\") | .databaseId" \
+              | head -n 1)"
             if [[ -n "$run_id" ]]; then
               break
             fi
@@ -49,16 +51,16 @@ jobs:
           if [[ -z "$run_id" ]]; then
             gh api --method POST "repos/$REPO/statuses/$TARGET_SHA" \
               -f state=failure \
-              -f context=vieneu-dev-cleanup-apk \
-              -f description='Canonical APK run was not found'
+              -f context=vieneu-dev-cleanup-apk-retry \
+              -f description='Fresh canonical APK run was not found'
             exit 1
           fi
 
           run_url="https://github.com/$REPO/actions/runs/$run_id"
           gh api --method POST "repos/$REPO/statuses/$TARGET_SHA" \
             -f state=pending \
-            -f context=vieneu-dev-cleanup-apk \
-            -f description='Canonical signed APK build is running' \
+            -f context=vieneu-dev-cleanup-apk-retry \
+            -f description='Fresh canonical signed APK build is running' \
             -f "target_url=$run_url"
 
           for _ in $(seq 1 180); do
@@ -69,15 +71,15 @@ jobs:
               if [[ "$conclusion" == success ]]; then
                 gh api --method POST "repos/$REPO/statuses/$TARGET_SHA" \
                   -f state=success \
-                  -f context=vieneu-dev-cleanup-apk \
-                  -f description='Canonical signed APK build passed' \
+                  -f context=vieneu-dev-cleanup-apk-retry \
+                  -f description='Fresh canonical signed APK build passed' \
                   -f "target_url=$run_url"
                 exit 0
               fi
               gh api --method POST "repos/$REPO/statuses/$TARGET_SHA" \
                 -f state=failure \
-                -f context=vieneu-dev-cleanup-apk \
-                -f description="Canonical APK build: $conclusion" \
+                -f context=vieneu-dev-cleanup-apk-retry \
+                -f description="Fresh canonical APK build: $conclusion" \
                 -f "target_url=$run_url"
               exit 1
             fi
@@ -86,7 +88,7 @@ jobs:
 
           gh api --method POST "repos/$REPO/statuses/$TARGET_SHA" \
             -f state=failure \
-            -f context=vieneu-dev-cleanup-apk \
-            -f description='Canonical APK build timed out' \
+            -f context=vieneu-dev-cleanup-apk-retry \
+            -f description='Fresh canonical APK build timed out' \
             -f "target_url=$run_url"
           exit 1
