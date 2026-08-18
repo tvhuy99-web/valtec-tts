@@ -1,0 +1,29 @@
+            prefill_batch_.logits[i] = (i == chunk_tokens - 1);
+        }
+        prefill_batch_.n_tokens = chunk_tokens;
+
+        if (diag) {
+            std::cout << "[V3NativeDiag] stage=backbone.prefill_chunk"
+                      << " start=" << chunk_start
+                      << " tokens=" << chunk_tokens << std::endl;
+        }
+
+        const int res = llama_decode(ctx_, prefill_batch_);
+        if (res != 0) {
+            std::cerr << "[V3NativeBackbone] Prefill chunk failed with code: " << res
+                      << " start=" << chunk_start
+                      << " tokens=" << chunk_tokens << std::endl;
+            return false;
+        }
+
+        decoded_pos_ = chunk_start + chunk_tokens;
+    }
+''',
+    'chunk Android prefill to bounded output allocation',
+)
+
+assets_cpp_path.write_text(assets_cpp, encoding='utf-8')
+acoustic_cpp_path.write_text(acoustic_cpp, encoding='utf-8')
+backbone_cpp_path.write_text(backbone_cpp, encoding='utf-8')
+
+print('Applied compact heads and chunked llama prefill')
