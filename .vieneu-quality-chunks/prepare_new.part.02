@@ -1,0 +1,51 @@
+        for line in run_checked(
+            "git",
+            "diff",
+            "--name-only",
+            "--submodule=diff",
+            cwd=source,
+        ).splitlines()
+        if line.strip()
+    ]
+    android_files = [
+        path
+        for path in repo_changed_all
+        if path.startswith("deployments/vieneu-android/app/")
+        or path == "deployments/vieneu-android/native/vieneu_jni.cpp"
+    ]
+
+    version_values = read_properties(android_root / "version.properties")
+    try:
+        app_version_code = int(version_values["VERSION_CODE"])
+        app_version_name = version_values["VERSION_NAME"]
+    except (KeyError, ValueError) as exc:
+        raise RuntimeError("version.properties must define VERSION_CODE and VERSION_NAME") from exc
+
+    manifest = {
+        "schema": 3,
+        "upstream_revision": actual_revision,
+        "source_patch_sha256": sha256_bytes(source_patch),
+        "source_patch_bytes": len(source_patch),
+        "source_changed_files": source_files,
+        "android_patch_sha256": sha256_bytes(android_patch),
+        "android_patch_bytes": len(android_patch),
+        "android_changed_files": android_files,
+        "reference_cache": "content-addressed-v4",
+        "acoustic_runtime": "opencl-f32-canonical",
+        "audio_transport": "native-wav-pcm16",
+        "java_audio_buffer_bytes": 0,
+        "engine_scope": "process",
+        "version_source": "deployments/vieneu-android/version.properties",
+        "app_version_code": app_version_code,
+        "app_version_name": app_version_name,
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    marker = source / ".vieneu-android-prepared.json"
+    marker.write_text(json.dumps(manifest, sort_keys=True) + "\n", encoding="utf-8")
+
+    print(json.dumps(manifest, indent=2, sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()
