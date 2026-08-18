@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - agent/vieneu-android-opencl-poc
+      - dev
     paths:
       - 'deployments/vieneu-android/**'
       - '.github/signing/vieneu-stable-debug.keystore.b64'
@@ -292,9 +292,9 @@ jobs:
 
       - name: Build stable-debug APK
         run: |
-          chmod +x deployments/android/gradlew
           cd deployments/vieneu-android
-          ../android/gradlew --no-daemon assembleDebug
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleDebug
 
       - name: Verify APK package signing and OpenCL quality payload
         shell: bash
