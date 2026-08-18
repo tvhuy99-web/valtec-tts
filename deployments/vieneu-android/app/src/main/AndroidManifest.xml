@@ -9,8 +9,6 @@
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="false">
 
-
-
         <uses-native-library
             android:name="libOpenCL.so"
             android:required="false" />
@@ -24,5 +22,24 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".SystemVoiceSettingsActivity"
+            android:exported="true"
+            android:label="Giọng đọc hệ thống VieNeu"
+            android:screenOrientation="unspecified" />
+
+        <service
+            android:name=".VieNeuTtsService"
+            android:exported="true"
+            android:label="VieNeu TTS"
+            android:permission="android.permission.BIND_TEXT_SERVICE">
+            <intent-filter>
+                <action android:name="android.intent.action.TTS_SERVICE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.speech.tts"
+                android:resource="@xml/tts_engine" />
+        </service>
     </application>
 </manifest>
