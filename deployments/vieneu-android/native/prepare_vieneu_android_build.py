@@ -45,6 +45,21 @@ def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def verify_pinned_submodules(source: Path) -> None:
+    status = run_checked("git", "submodule", "status", "--recursive", cwd=source)
+    invalid = []
+    for line in status.splitlines():
+        if not line:
+            continue
+        prefix = line[0]
+        if prefix != " ":
+            invalid.append(line)
+    if invalid:
+        raise RuntimeError(
+            "VieNeu submodule revisions do not match the pinned gitlinks:\n" + "\n".join(invalid)
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("source_dir")
@@ -71,13 +86,25 @@ def main() -> None:
             f"Pinned VieNeu revision mismatch: expected {args.expected_revision}, got {actual_revision}"
         )
 
-    source_dirty = run_checked("git", "status", "--porcelain", "--untracked-files=no", cwd=source)
+    source_dirty = run_checked(
+        "git",
+        "status",
+        "--porcelain",
+        "--untracked-files=no",
+        "--ignore-submodules=dirty",
+        cwd=source,
+    )
     if source_dirty.strip():
-        raise RuntimeError("VieNeu source must be clean before Android materialization")
+        raise RuntimeError(
+            "VieNeu tracked source must be clean before Android materialization:\n" + source_dirty
+        )
+    verify_pinned_submodules(source)
 
     repo_dirty = run_checked("git", "status", "--porcelain", "--untracked-files=no", cwd=repo_root)
     if repo_dirty.strip():
-        raise RuntimeError("Repository checkout must be clean before Android materialization")
+        raise RuntimeError(
+            "Repository checkout must be clean before Android materialization:\n" + repo_dirty
+        )
 
     v092_source_script = native_dir / "optimize_vieneu_android_v092_source.py"
     v092_android_script = native_dir / "optimize_vieneu_android_v092_android.py"
