@@ -131,20 +131,29 @@ object VoiceProfileStore {
     fun delete(context: Context, id: String): Boolean {
         val dir = File(root(context), id)
         if (!dir.isDirectory) return false
+        val settingsBeforeDelete = loadSettings(context)
+        val deletingSelected =
+            settingsBeforeDelete.profileId == id || settingsBeforeDelete.voiceKey == VoiceCatalog.savedKey(id)
         val removed = dir.deleteRecursively()
         if (removed) {
-            val settings = loadSettings(context)
-            if (settings.profileId == id || settings.voiceKey == VoiceCatalog.savedKey(id)) {
+            if (deletingSelected) {
                 val fallback = VoiceCatalog.default(context)
                 saveSettings(
                     context,
-                    settings.copy(
+                    settingsBeforeDelete.copy(
                         profileId = fallback?.profileId,
                         voiceKey = fallback?.key,
                     ),
                 )
             }
-            Diagnostics.log("voice_profile", "voice_profile.deleted", data = mapOf("profile_id" to id))
+            Diagnostics.log(
+                "voice_profile",
+                "voice_profile.deleted",
+                data = mapOf(
+                    "profile_id" to id,
+                    "was_system_voice" to deletingSelected,
+                ),
+            )
             VoiceCatalog.notifyChanged(context, "voice_deleted")
         }
         return removed
