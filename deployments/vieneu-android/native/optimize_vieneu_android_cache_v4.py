@@ -250,20 +250,13 @@ replace_once(
 
 replace_once(
     engine,
-    '''        if (!codec_.encode_stereo(stereo, frames, ref_codes, error)) return false;
-        ref_diag_ms("reference.codec_encode", t_ref_stage);
-    }
-    ref_diag_ms("reference.total", t_ref_total);
-''',
-    '''        if (!codec_.encode_stereo(stereo, frames, ref_codes, error)) return false;
-        ref_diag_ms("reference.codec_encode", t_ref_stage);
+    '        ref_diag_ms("reference.codec_encode", t_ref_stage);\n',
+    '''        ref_diag_ms("reference.codec_encode", t_ref_stage);
         save_reference_codes_cache(
             ref_audio_path,
             effective_denoise,
             config_.n_vq,
             ref_codes);
-    }
-    ref_diag_ms("reference.total", t_ref_total);
 ''',
     "reference codes cache store",
 )
@@ -303,7 +296,7 @@ reference_block = f'''    private fun referenceStoreDir(): File =
         val marker = referenceMarkerFile()
         marker.parentFile?.mkdirs()
         val temp = File(marker.absolutePath + ".new")
-        temp.writeText(hash + "\\n", Charsets.UTF_8)
+        temp.writeText(hash + "\n", Charsets.UTF_8)
         if (marker.exists() && !marker.delete()) {{
             temp.delete()
             throw IllegalStateException("Không thể cập nhật giọng mẫu đang dùng.")
@@ -605,7 +598,7 @@ checks = {
         "save_reference_codes_cache",
     ),
     activity: (
-        'MessageDigest.getInstance("SHA-256")',
+        "MessageDigest.getInstance(\"SHA-256\")",
         cache_namespace,
         "active-" + cache_namespace,
         legacy_cache_namespace,
