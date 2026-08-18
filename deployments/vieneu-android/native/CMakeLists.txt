@@ -72,7 +72,7 @@ target_compile_definitions(vieneu-tts-core PRIVATE
     VIENEU_USE_SEA_G2P=1
 )
 
-add_library(vieneu_jni SHARED vieneu_jni.cpp)
+add_library(vieneu_jni SHARED vieneu_jni.cpp vieneu_cancel_jni.cpp)
 target_include_directories(vieneu_jni PRIVATE
     "${VIENEU_SOURCE_DIR}/src"
     "${ONNXRUNTIME_ROOT}/include"
