@@ -90,9 +90,7 @@ def main() -> None:
     with preserve_file(v092_source_script):
         run_script(native_dir / "optimize_vieneu_android_memory.py", str(source))
 
-    run_script(native_dir / "optimize_vieneu_android_acoustic_f16.py", str(source))
     run_script(native_dir / "optimize_vieneu_android_acoustic_opencl.py", str(source))
-    run_script(native_dir / "optimize_vieneu_android_acoustic_quality.py", str(source))
     run_script(native_dir / "optimize_vieneu_android_generation_quality.py", str(source))
 
     with preserve_file(v092_android_script):
@@ -101,6 +99,7 @@ def main() -> None:
     run_script(native_dir / "optimize_vieneu_android_opencl_runtime.py", str(source))
     run_script(native_dir / "patch_llama_opencl_qcom_shuffle.py", str(source))
     run_script(native_dir / "optimize_vieneu_android_cache_v3.py", str(source), str(android_root))
+    run_script(native_dir / "finalize_vieneu_android_direct_wav.py", str(android_root))
 
     if v092_source_script.read_bytes() != v092_source_original:
         raise RuntimeError("v092 source patch driver was not restored after materialization")
@@ -182,7 +181,7 @@ def main() -> None:
     ]
 
     manifest = {
-        "schema": 1,
+        "schema": 2,
         "upstream_revision": actual_revision,
         "source_patch_sha256": sha256_bytes(source_patch),
         "source_patch_bytes": len(source_patch),
@@ -191,6 +190,9 @@ def main() -> None:
         "android_patch_bytes": len(android_patch),
         "android_changed_files": android_files,
         "reference_cache": "content-addressed-v3",
+        "acoustic_runtime": "opencl-f32-canonical",
+        "audio_transport": "native-wav-pcm16",
+        "java_audio_buffer_bytes": 0,
     }
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
