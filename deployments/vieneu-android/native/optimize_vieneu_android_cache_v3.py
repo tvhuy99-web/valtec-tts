@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Materialize content-addressed reference caching for the Android VieNeu build."""
+
 
 import re
 import sys

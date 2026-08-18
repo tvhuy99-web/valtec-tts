@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Materialize all pinned VieNeu Android source changes before CMake configure."""
+
 
 import argparse
 import contextlib

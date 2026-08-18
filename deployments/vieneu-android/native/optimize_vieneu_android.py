@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-'''Android-only performance patches for the pinned VieNeu native source.
 
-This script runs after diagnostics instrumentation and before add_subdirectory().
-It intentionally fails closed if the pinned upstream source no longer matches.
-'''
 
 import pathlib
 import sys
@@ -42,10 +38,10 @@ header = replace_once(
     bool has_denoiser_ = false;
     std::vector<float> prompt_embeds_;
 
-    // Android hot-path cache. The app frequently synthesizes multiple texts with
-    // the same reference WAV. Re-running speaker embedding + MOSS reference
-    // encoding costs several seconds, so retain the tiny derived tensors and
-    // invalidate them when file size/mtime or options change.
+
+
+
+
     bool reference_cache_valid_ = false;
     std::string reference_cache_path_;
     long long reference_cache_size_ = -1;
@@ -170,8 +166,8 @@ acoustic_cpp = replace_once(
     acoustic_cpp,
     '''        use_ggml_heads = env_flag_enabled("VIENEU_ACOUSTIC_GGML_HEADS", true);
 ''',
-    '''        // Android perf build keeps only the original embedding matrices; the
-        // transposed scalar fallback copies are intentionally not allocated.
+    '''
+
         use_ggml_heads = true;
 ''',
     'force GGML heads on Android',
@@ -183,19 +179,19 @@ backbone_cpp = replace_once(
     ctx_params.n_ctx = 2048;
     ctx_params.n_threads = n_threads;
     ctx_params.n_threads_batch = n_threads_batch;
-    ctx_params.embeddings = true; // Enable embeddings extraction
+    ctx_params.embeddings = true;
     ctx_params.no_perf = true;
 ''',
     '''    llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = 2048;
-    // llama.cpp emits every token embedding while embeddings=true. Keep batches
-    // bounded so the output/logit buffers never scale to the full 2048 context.
+
+
     ctx_params.n_batch = 128;
     ctx_params.n_ubatch = 128;
     ctx_params.n_outputs_max = 128;
     ctx_params.n_threads = n_threads;
     ctx_params.n_threads_batch = n_threads_batch;
-    ctx_params.embeddings = true; // Enable embeddings extraction
+    ctx_params.embeddings = true;
     ctx_params.no_perf = true;
 
     if (std::getenv("VIENEU_V3_NATIVE_BENCHMARK")) {
@@ -228,17 +224,17 @@ backbone_cpp = replace_once(
 
 backbone_cpp = replace_once(
     backbone_cpp,
-    '''    // Reset KV cache and decoded position
+    '''
     clear_kv_cache();
 
-    // Copy input embeddings
+
     std::memcpy(prefill_batch_.embd, embeds.data(), embeds.size() * sizeof(float));
 
     for (int32_t i = 0; i < n_tokens; ++i) {
         prefill_batch_.pos[i] = i;
         prefill_batch_.n_seq_id[i] = 1;
         prefill_batch_.seq_id[i][0] = 0;
-        prefill_batch_.logits[i] = (i == n_tokens - 1); // request logits/embedding output for last token only
+        prefill_batch_.logits[i] = (i == n_tokens - 1);
     }
     prefill_batch_.n_tokens = n_tokens;
 
@@ -251,10 +247,10 @@ backbone_cpp = replace_once(
 
     decoded_pos_ = n_tokens;
 ''',
-    '''    // Reset KV cache once, then feed the prompt in bounded blocks. llama.cpp
-    // currently treats embeddings=true as output-all, so a single large prefill
-    // would require one output row per prompt token. Chunking keeps the maximum
-    // output allocation at 128 rows while preserving the same causal KV sequence.
+    '''
+
+
+
     clear_kv_cache();
 
     constexpr int32_t kPrefillChunkTokens = 128;

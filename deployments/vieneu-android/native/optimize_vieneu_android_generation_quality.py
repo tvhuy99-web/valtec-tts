@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-'''Improve VieNeu Android generation quality without diverging from upstream behavior.
 
-The Android runtime keeps the official v3 Turbo sampling defaults and reference-code
-conditioning, but it must not reuse one fixed seed forever or crop the reference
-prompt to an arbitrary high-energy window. Each utterance gets a fresh seed (unless
-VIENEU_V3_SAMPLING_SEED is explicitly set for deterministic diagnostics), the full
-cleaned reference clip is encoded, and generation that reaches max_new_frames before
-EOS is treated as a failed attempt instead of decoding and saving truncated speech.
-'''
 
 import pathlib
 import sys
@@ -46,14 +38,14 @@ replace_once(
 replace_once(
     engine_cpp,
     '''        std::vector<float> mono48 = v3_resample_linear(wav.mono, wav.sample_rate, sample_rate());\n        ref_diag_ms("reference.resample_48k", t_ref_stage);\n        const int64_t frames = static_cast<int64_t>(mono48.size());\n''',
-    '''        std::vector<float> mono48 = v3_resample_linear(wav.mono, wav.sample_rate, sample_rate());\n        ref_diag_ms("reference.resample_48k", t_ref_stage);\n\n        // Match the official path: encode the complete cleaned reference clip.\n        // Selecting an arbitrary high-energy 3.2-second window can retain noise or\n        // leak the wrong prosody/content into the autoregressive reference prompt.\n        if (diag) {\n            std::cout << "[V3NativeDiag] stage=reference.codec_input"\n                      << " source_ms=" << (1000.0 * static_cast<double>(wav.mono.size()) / wav.sample_rate)\n                      << " duration_ms=" << (1000.0 * static_cast<double>(mono48.size()) / sample_rate())\n                      << " policy=full_cleaned_reference\\n";\n        }\n        const int64_t frames = static_cast<int64_t>(mono48.size());\n''',
+    '''        std::vector<float> mono48 = v3_resample_linear(wav.mono, wav.sample_rate, sample_rate());\n        ref_diag_ms("reference.resample_48k", t_ref_stage);\n\n        ''',
     'preserve full cleaned reference prompt',
 )
 
 replace_once(
     engine_cpp,
     '''    std::lock_guard<std::mutex> lock(run_mutex_);\n    try {\n        std::vector<float> synth_h;\n''',
-    '''    std::lock_guard<std::mutex> lock(run_mutex_);\n    try {\n        // Production requests must not be locked to seed 42. A fixed bad sample\n        // otherwise repeats forever. Tests can still force a deterministic seed\n        // with VIENEU_V3_SAMPLING_SEED.\n        uint32_t sampling_seed = static_cast<uint32_t>(\n            std::chrono::high_resolution_clock::now().time_since_epoch().count());\n        for (unsigned char c : phonemes) {\n            sampling_seed ^= static_cast<uint32_t>(c);\n            sampling_seed *= 16777619u;\n        }\n        if (const char* forced_seed = std::getenv("VIENEU_V3_SAMPLING_SEED")) {\n            char* end = nullptr;\n            const unsigned long parsed = std::strtoul(forced_seed, &end, 10);\n            if (end != forced_seed && end && *end == '\\0') {\n                sampling_seed = static_cast<uint32_t>(parsed);\n            }\n        }\n        if (sampling_seed == 0u) sampling_seed = 1u;\n        sampler_.reset_seed(sampling_seed);\n        if (benchmark_enabled) {\n            std::cerr << "[V3NativeDiag] stage=sampling.reset"\n                      << " seed=" << sampling_seed\n                      << " mode=" << (std::getenv("VIENEU_V3_SAMPLING_SEED") ? "forced" : "per_utterance")\n                      << " phoneme_bytes=" << phonemes.size() << "\\n";\n        }\n        std::vector<float> synth_h;\n''',
+    '''    std::lock_guard<std::mutex> lock(run_mutex_);\n    try {\n        ''',
     'reset sampler per utterance',
 )
 

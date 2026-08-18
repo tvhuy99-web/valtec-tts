@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Patch the pinned VieNeu core for persistent speaker cache and dialect choice."""
+
 
 import re
 import sys
@@ -159,9 +159,9 @@ void save_speaker_embedding_cache(const std::string& ref_audio_path,
 std::string apply_vietnamese_dialect(std::string phonemes, const std::string& dialect) {
     if (dialect != "south") return phonemes;
 
-    // sea-g2p follows the Northern d/gi realization /z/. The Southern option
-    // changes only token-initial /z/ to the palatal glide /j/ and leaves tones,
-    // vowels and codas untouched.
+
+
+
     bool token_start = true;
     for (size_t i = 0; i < phonemes.size(); ++i) {
         const unsigned char c = static_cast<unsigned char>(phonemes[i]);
@@ -179,8 +179,8 @@ std::string apply_vietnamese_dialect(std::string phonemes, const std::string& di
 '''
 replace_once(
     engine,
-    '''bool contains_v3_emotion_token(const std::string& text) {\n    return text.find("<|emotion_1|>") != std::string::npos ||\n           text.find("<|emotion_2|>") != std::string::npos ||\n           text.find("<|emotion_3|>") != std::string::npos;\n}\n\n} // namespace\n''',
-    '''bool contains_v3_emotion_token(const std::string& text) {\n    return text.find("<|emotion_1|>") != std::string::npos ||\n           text.find("<|emotion_2|>") != std::string::npos ||\n           text.find("<|emotion_3|>") != std::string::npos;\n}\n''' + helpers + '''\n} // namespace\n''',
+    '''bool contains_v3_emotion_token(const std::string& text) {\n    return text.find("<|emotion_1|>") != std::string::npos ||\n           text.find("<|emotion_2|>") != std::string::npos ||\n           text.find("<|emotion_3|>") != std::string::npos;\n}\n\n} ''',
+    '''bool contains_v3_emotion_token(const std::string& text) {\n    return text.find("<|emotion_1|>") != std::string::npos ||\n           text.find("<|emotion_2|>") != std::string::npos ||\n           text.find("<|emotion_3|>") != std::string::npos;\n}\n''' + helpers + '''\n} ''',
     "speaker cache and dialect helpers",
 )
 

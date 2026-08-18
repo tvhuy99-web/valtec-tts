@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-'''Backport Qualcomm subgroup aliases and apply final Android diagnostics.
 
-Adreno 732 exposes cl_qcom_subgroup_shuffle but not the KHR builtin names. The
-previous patch covered only one flash-attention source, while another embedded
-kernel still failed to compile. Patch every .cl source that calls
-sub_group_shuffle_xor and lacks the Qualcomm alias. This is the last source
-patch invoked by Android CMake, so it also applies diagnostics after all
-performance transformations are complete.
-'''
 
 import ast
 import pathlib
@@ -55,13 +47,7 @@ print('Patched Qualcomm subgroup shuffle aliases in: ' + ', '.join(patched))
 
 
 def rawify_replacement_literals(source: str, script_name: str) -> str:
-    '''Preserve C++ escapes only in genuinely multiline replacement snippets.
 
-    Single-line Python literals such as the include block intentionally use
-    ``\\n`` to construct source line breaks and must remain ordinary strings.
-    Multiline replacement snippets already contain real structural newlines;
-    making only those raw preserves C++ escapes such as ``"\\n"``.
-    '''
     tree = ast.parse(source, filename=script_name)
     line_offsets = [0]
     for line in source.splitlines(keepends=True):
@@ -109,7 +95,7 @@ def rawify_replacement_literals(source: str, script_name: str) -> str:
 
 
 def assert_no_multiline_cpp_string(path: pathlib.Path) -> None:
-    '''Reject ordinary C++ string literals that accidentally contain a newline.'''
+
     text = path.read_text(encoding='utf-8')
     state = 'normal'
     escaped = False

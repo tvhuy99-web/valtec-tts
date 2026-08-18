@@ -1,15 +1,5 @@
 #!/usr/bin/env python3
-'''Android-only ONNX Runtime memory retention and v0.9.2 core patch driver.
 
-The native VieNeu pipeline uses CPU arenas for the speaker encoder and MOSS
-codec. On Android, those arenas retain large workspaces after Run(), causing RSS
-to grow after reference enrollment and again after long codec decodes. ORT 1.24.3
-supports per-run CPU arena shrinkage while keeping the arena enabled during the
-inference itself.
-
-After the memory edits, this driver applies the versioned persistent speaker
-cache and dialect patch to the same pinned upstream source tree.
-'''
 
 import pathlib
 import runpy

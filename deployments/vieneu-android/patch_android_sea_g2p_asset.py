@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-'''Install the bundled sea-g2p dictionary in the Android model directory.'''
+
 
 import pathlib
 import sys

@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-'''Register the pinned GGML OpenCL backend on Android and require full backbone offload.
 
-This experiment deliberately has no whole-model CPU fallback. If an OpenCL device
-cannot be exposed to the app, VieNeu initialization fails with a diagnostic error
-instead of silently running the semantic backbone on CPU.
-'''
 
 import pathlib
 import sys
@@ -48,7 +43,7 @@ replace_once(
 
 replace_once(
     '''        backbone_params.n_threads = init.n_threads;\n        backbone_params.n_threads_batch = init.n_threads;\n        t_stage = std::chrono::high_resolution_clock::now();\n        if (!backbone_.initialize(backbone_params)) {\n''',
-    '''        backbone_params.n_threads = init.n_threads;\n        backbone_params.n_threads_batch = init.n_threads;\n        // Request every semantic-backbone layer on the OpenCL GPU. There is no\n        // n_gpu_layers=0 fallback in this experiment: absence of OpenCL already\n        // failed initialization above.\n        backbone_params.n_gpu_layers = 999;\n        std::cerr << "[V3NativeDiag] stage=opencl.backbone_offload"\n                  << " enabled=1 requested_layers=" << backbone_params.n_gpu_layers << "\\n";\n        t_stage = std::chrono::high_resolution_clock::now();\n        if (!backbone_.initialize(backbone_params)) {\n''',
+    '''        backbone_params.n_threads = init.n_threads;\n        backbone_params.n_threads_batch = init.n_threads;\n        ''',
     'enable OpenCL full backbone offload',
 )
 

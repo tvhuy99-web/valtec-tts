@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate Android voice UI, EOS handling and VieNeu 0.9.3 quality modes."""
+
 
 import runpy
 import sys

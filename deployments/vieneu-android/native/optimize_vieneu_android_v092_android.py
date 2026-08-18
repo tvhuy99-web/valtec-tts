@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Patch generated Android/JNI sources for VieNeu 0.9.2."""
+
 
 import re
 import sys
@@ -65,8 +65,8 @@ replace_once(
             params.top_k = 1;
             params.top_p = 1.0f;
             params.repetition_penalty = 1.2f;
-            // Long text remains supported: the native engine splits it into
-            // independent chunks before applying this per-chunk frame ceiling.
+
+
             params.max_chars = 96;
         }
 ''',

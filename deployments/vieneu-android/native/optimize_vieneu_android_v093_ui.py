@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fix diagnostics clearing and remove redundant UI notes for VieNeu 0.9.3."""
+
 
 import sys
 from pathlib import Path

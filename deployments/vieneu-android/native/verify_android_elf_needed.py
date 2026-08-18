@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reject Android ELF dependencies that cannot be resolved from the APK namespace."""
+
 
 from __future__ import annotations
 

@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Expose stable/reference/deterministic modes on the fast OpenCL runtime.
 
-The default mode uses only the 192-dimensional speaker embedding for consistency.
-A fidelity mode keeps reference codes, and a deterministic greedy mode remains
-available for reproducible frame/code diagnostics. Acoustic and semantic matrix
-hot paths run on OpenCL with original F32 acoustic weights.
-"""
 
 import sys
 from pathlib import Path

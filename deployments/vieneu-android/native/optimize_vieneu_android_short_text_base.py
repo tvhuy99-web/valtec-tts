@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-'''Apply safe Android generation policy while preserving VieNeu v3 quality defaults.
 
-The old mobile policy guessed utterance duration from word count and hard-stopped a
-six-word sentence at 38 frames. This patch restores the upstream frame budget,
-requires EOS before audio is accepted, and retries once with a fresh sampler seed
-when the model reaches the safety ceiling without finishing.
-'''
 
 import pathlib
 import sys
@@ -27,7 +21,7 @@ def replace_once(old: str, new: str, label: str) -> None:
 
 replace_once(
     '''void redirect_native_console(const std::string& dir) {\n''',
-    '''bool is_no_eos_error(const std::string& value) {\n    return value.find("VIENEU_NO_EOS") != std::string::npos;\n}\n\nvoid apply_tail_fade(std::vector<float>& audio, int sample_rate) {\n    if (audio.empty() || sample_rate <= 0) return;\n    const size_t fade_samples = (std::min)(\n        audio.size(),\n        static_cast<size_t>((std::max)(1, sample_rate / 50))); // 20 ms\n    const size_t start = audio.size() - fade_samples;\n    for (size_t i = 0; i < fade_samples; ++i) {\n        const float gain = static_cast<float>(fade_samples - i - 1) /\n                           static_cast<float>(fade_samples);\n        audio[start + i] *= gain;\n    }\n}\n\nvoid redirect_native_console(const std::string& dir) {\n''',
+    '''bool is_no_eos_error(const std::string& value) {\n    return value.find("VIENEU_NO_EOS") != std::string::npos;\n}\n\nvoid apply_tail_fade(std::vector<float>& audio, int sample_rate) {\n    if (audio.empty() || sample_rate <= 0) return;\n    const size_t fade_samples = (std::min)(\n        audio.size(),\n        static_cast<size_t>((std::max)(1, sample_rate / 50))); ''',
     'EOS and tail-fade helpers',
 )
 
@@ -45,7 +39,7 @@ replace_once(
 
 replace_once(
     '''        params.denoise_ref = true;\n        params.use_ref_codes = true;\n        params.apply_watermark = true;\n        params.max_chars = 384;\n        params.progress = [](const VieneuProgressEvent& event) { log_progress(event); };\n\n        std::ostringstream start_data;\n''',
-    '''        params.denoise_ref = true;\n        params.use_ref_codes = true;\n        params.apply_watermark = true;\n        params.max_chars = 120;\n        params.temperature = 0.8f;\n        params.top_k = 25;\n        params.top_p = 0.95f;\n        params.repetition_penalty = 1.2f;\n        // Keep the native upstream safety budget. It is a ceiling, not a\n        // duration prediction. Successful output must stop through EOS.\n        params.max_new_frames = 300;\n        params.progress = [](const VieneuProgressEvent& event) { log_progress(event); };\n\n        std::ostringstream start_data;\n''',
+    '''        params.denoise_ref = true;\n        params.use_ref_codes = true;\n        params.apply_watermark = true;\n        params.max_chars = 120;\n        params.temperature = 0.8f;\n        params.top_k = 25;\n        params.top_p = 0.95f;\n        params.repetition_penalty = 1.2f;\n        ''',
     'restore upstream generation budget and quality settings',
 )
 

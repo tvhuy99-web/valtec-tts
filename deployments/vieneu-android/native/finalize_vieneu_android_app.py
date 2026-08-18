@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Finalize Android app lifecycle and authoritative version metadata."""
+
 
 import re
 import sys

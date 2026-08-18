@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-'''Run VieNeu acoustic hot paths directly on OpenCL with canonical F32 weights.
 
-This is the production quality configuration. Older Android builds first
-converted projection/FFN weights to FP16/Q8 and then ran a second patch to undo
-those conversions back to F32. This patch now materializes the final OpenCL F32
-state directly, so production no longer depends on mutually cancelling patches.
-'''
 
 import pathlib
 import re
@@ -64,9 +58,9 @@ public:
         out_dim_ = out_dim;
 
         ggml_init_params params = {
-            /* .mem_size   = */ 1024 * 1024,
-            /* .mem_buffer = */ nullptr,
-            /* .no_alloc   = */ true,
+             1024 * 1024,
+             nullptr,
+             true,
         };
         ctx_ = ggml_init(params);
         if (!ctx_) {
@@ -162,9 +156,9 @@ public:
         intermediate_dim_ = intermediate_dim;
 
         ggml_init_params params = {
-            /* .mem_size   = */ 2 * 1024 * 1024,
-            /* .mem_buffer = */ nullptr,
-            /* .no_alloc   = */ true,
+             2 * 1024 * 1024,
+             nullptr,
+             true,
         };
         ctx_ = ggml_init(params);
         if (!ctx_) {
@@ -240,7 +234,7 @@ private:
     int intermediate_dim_ = 0;
 };
 
-} // namespace'''
+} '''
 
 replace_regex_once(
     r'class GgmlFfnOp \{.*?\n\};\n\n\} // namespace',

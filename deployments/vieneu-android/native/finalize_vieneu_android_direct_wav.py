@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Finalize Android synthesis so JNI writes PCM16 WAV instead of returning FloatArray."""
+
 
 import re
 import sys

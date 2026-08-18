@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""Use stable sampling while accepting every real EOS immediately.
 
-The previous duration heuristic rejected valid 18–21-frame Vietnamese sentences,
-then repeated the whole expensive synthesis three times. Duration cannot prove
-whether speech content is complete. This patch accepts any output that stopped
-through the model's EOS token and retries only when generation reaches the safety
-cap without EOS.
-"""
 
 import sys
 from pathlib import Path
