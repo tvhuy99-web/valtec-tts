@@ -2,6 +2,13 @@ name: VieNeu Android OpenCL Quality APK
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - dev
+    paths:
+      - 'deployments/vieneu-android/**'
+      - '.github/signing/vieneu-stable-debug.keystore.b64'
+      - '.github/workflows/vieneu-android-apk.yml'
   push:
     branches:
       - dev
@@ -131,11 +138,38 @@ jobs:
           echo "SEA_G2P_INCLUDE_DIR=$SEA_G2P_INCLUDE_DIR" >> "$GITHUB_ENV"
           echo "SEA_G2P_DICT=$SEA_G2P_DICT" >> "$GITHUB_ENV"
 
-      - name: Instrument VieNeu core diagnostics
+      - name: Materialize pinned VieNeu Android source
+        shell: bash
         run: |
-          python3 deployments/vieneu-android/native/instrument_vieneu_diagnostics.py .build/vieneu-src
+          set -euo pipefail
+          python3 deployments/vieneu-android/native/prepare_vieneu_android_build.py \
+            .build/vieneu-src \
+            deployments/vieneu-android \
+            --expected-revision "$VIENEU_COMMIT" \
+            --source-diff-output .build/vieneu-android-source.patch \
+            --android-diff-output .build/vieneu-android-project.patch \
+            --manifest-output .build/vieneu-android-materialization.json
+
+          test -s .build/vieneu-android-source.patch
+          test -s .build/vieneu-android-project.patch
+          test -s .build/vieneu-android-materialization.json
+          test -s .build/vieneu-src/.vieneu-android-prepared.json
           git -C .build/vieneu-src diff --check
+          git diff --check -- deployments/vieneu-android
           grep -n 'V3NativeDiag' .build/vieneu-src/src/vieneu/v3_native/vieneu_v3_native.cpp
+          grep -n 'kSpeakerCacheVersion = 3' .build/vieneu-src/src/vieneu/v3_native/vieneu_v3_native.cpp
+          grep -n 'persistent_v3' deployments/vieneu-android/native/vieneu_jni.cpp
+          grep -n 'MessageDigest.getInstance("SHA-256")' deployments/vieneu-android/app/src/main/java/com/vieneu/voiceclone/MainActivity.kt
+
+          if grep -n 'execute_process(' deployments/vieneu-android/native/CMakeLists.txt; then
+            echo "::error::CMake must not mutate or patch VieNeu source during configure"
+            exit 1
+          fi
+
+          sha256sum \
+            .build/vieneu-android-source.patch \
+            .build/vieneu-android-project.patch \
+            .build/vieneu-android-materialization.json
 
       - name: Build Android OpenCL link library
         shell: bash
@@ -200,6 +234,7 @@ jobs:
           test -f "$OPENCL_INCLUDE_DIR/CL/cl.h"
           test -f "$SEA_G2P_LIBRARY"
           test -f "$SEA_G2P_INCLUDE_DIR/sea_g2p.h"
+          test -s .build/vieneu-src/.vieneu-android-prepared.json
 
           cmake -S deployments/vieneu-android/native -B .build/vieneu-android-native -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK}/build/cmake/android.toolchain.cmake" \
@@ -335,6 +370,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: vieneu-voice-clone-android-arm64-opencl-quality
-          path: deployments/vieneu-android/app/build/outputs/apk/debug/app-debug.apk
+          path: |
+            deployments/vieneu-android/app/build/outputs/apk/debug/app-debug.apk
+            .build/vieneu-android-source.patch
+            .build/vieneu-android-project.patch
+            .build/vieneu-android-materialization.json
           retention-days: 30
           if-no-files-found: error
