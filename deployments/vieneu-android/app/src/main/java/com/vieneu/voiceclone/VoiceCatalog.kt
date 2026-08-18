@@ -61,7 +61,7 @@ object VoiceCatalog {
             val defaultSuffix = if (seed.isDefault) " (mặc định)" else ""
             VoiceCatalogEntry(
                 key = seed.key,
-                label = seed.name + if (duplicate) sourceSuffix else "" + defaultSuffix,
+                label = seed.name + (if (duplicate) sourceSuffix else "") + defaultSuffix,
                 description = seed.description,
                 source = seed.source,
                 nativeVoiceId = seed.nativeVoiceId,
@@ -114,7 +114,7 @@ object VoiceCatalog {
         val intent = Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE).setPackage(context.packageName)
         return context.packageManager
             .queryIntentServices(intent, PackageManager.MATCH_DEFAULT_ONLY)
-            .any { it.serviceInfo?.name == VieNeuTtsService::class.java.name }
+            .any { it.serviceInfo.name == VieNeuTtsService::class.java.name }
     }
 
     private fun loadPresetSeed(context: Context, modelReady: Boolean): List<Seed> {
