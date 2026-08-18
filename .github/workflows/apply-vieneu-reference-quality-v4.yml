@@ -24,6 +24,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: agent/reference-quality-v4-build
 
       - name: Reconstruct validated sources
         shell: bash
@@ -53,20 +54,6 @@ jobs:
           NATIVE='deployments/vieneu-android/native'
           rm -f "$NATIVE/optimize_vieneu_android_cache_v3.py"
           printf 'VERSION_CODE=25\nVERSION_NAME=0.9.8-reference-denoise-cache-v4\n' > deployments/vieneu-android/version.properties
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('.github/workflows/vieneu-android-apk.yml')
-          s = p.read_text(encoding='utf-8')
-          pairs = [
-              ("grep -n 'kSpeakerCacheVersion = 3'", "grep -n 'kSpeakerCacheVersion = 4'"),
-              ("grep -n 'persistent_v3'", "grep -n 'persistent_v4'"),
-          ]
-          for old, new in pairs:
-              if s.count(old) != 1:
-                  raise SystemExit(f'CI marker expected exactly once: {old}')
-              s = s.replace(old, new, 1)
-          p.write_text(s, encoding='utf-8')
-          PY
 
           python3 -m py_compile \
             "$NATIVE/optimize_vieneu_android_generation_quality.py" \
