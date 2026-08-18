@@ -1,0 +1,78 @@
+name: Verify dev cleanup APK build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - dev
+    paths:
+      - '.github/workflows/verify-dev-cleanup.yml'
+
+permissions:
+  actions: read
+  contents: read
+  statuses: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for canonical APK build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TARGET_SHA: 6736dbd5abea36ca16b43e9dc96de7d1ead36eab
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_id=''
+          for _ in $(seq 1 120); do
+            run_id="$(gh run list \
+              --repo "$REPO" \
+              --workflow vieneu-android-apk.yml \
+              --commit "$TARGET_SHA" \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId // empty')"
+            if [[ -n "$run_id" ]]; then
+              break
+            fi
+            sleep 5
+          done
+
+          if [[ -z "$run_id" ]]; then
+            gh api --method POST "repos/$REPO/statuses/$TARGET_SHA" \
+              -f state=failure \
+              -f context=vieneu-dev-cleanup-apk \
+              -f description='Canonical APK run was not found'
+            exit 1
+          fi
+
+          for _ in $(seq 1 180); do
+            state="$(gh run view "$run_id" --repo "$REPO" --json status,conclusion --jq '.status + ":" + (.conclusion // "")')"
+            echo "run=$run_id state=$state"
+            if [[ "$state" == completed:* ]]; then
+              conclusion="${state#completed:}"
+              if [[ "$conclusion" == success ]]; then
+                gh api --method POST "repos/$REPO/statuses/$TARGET_SHA" \
+                  -f state=success \
+                  -f context=vieneu-dev-cleanup-apk \
+                  -f description='Canonical signed APK build passed' \
+                  -f "target_url=https://github.com/$REPO/actions/runs/$run_id"
+                exit 0
+              fi
+              gh api --method POST "repos/$REPO/statuses/$TARGET_SHA" \
+                -f state=failure \
+                -f context=vieneu-dev-cleanup-apk \
+                -f description="Canonical APK build: $conclusion" \
+                -f "target_url=https://github.com/$REPO/actions/runs/$run_id"
+              exit 1
+            fi
+            sleep 10
+          done
+
+          gh api --method POST "repos/$REPO/statuses/$TARGET_SHA" \
+            -f state=failure \
+            -f context=vieneu-dev-cleanup-apk \
+            -f description='Canonical APK build timed out'
+          exit 1
