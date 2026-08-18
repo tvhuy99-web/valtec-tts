@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
-
 import pathlib
+import subprocess
 import sys
 
 if len(sys.argv) != 2:
@@ -58,3 +58,43 @@ else:
 gradle = app / 'build.gradle.kts'
 if not gradle.is_file():
     raise RuntimeError(f'Missing Android Gradle file: {gradle}')
+
+# Temporary CI diagnostic: run only the Kotlin compilation task here so the
+# actual compiler error is emitted in a compact form before the very large
+# assembleDebug log can be truncated by the connector.
+android_root = app.parent
+gradlew = android_root / 'gradlew'
+if not gradlew.is_file():
+    raise RuntimeError(f'Missing Gradle wrapper: {gradlew}')
+
+gradlew.chmod(gradlew.stat().st_mode | 0o111)
+result = subprocess.run(
+    [str(gradlew.resolve()), '--no-daemon', '--console=plain', ':app:compileDebugKotlin'],
+    cwd=android_root,
+    text=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+)
+if result.returncode != 0:
+    lines = result.stdout.splitlines()
+    needles = (
+        'e: ',
+        'error:',
+        'FAILURE:',
+        'What went wrong',
+        'Execution failed for task',
+        'Compilation error',
+        'Unresolved reference',
+        'Smart cast',
+        '.kt:',
+    )
+    selected = [line for line in lines if any(needle in line for needle in needles)]
+    print('=== Kotlin compile diagnostic ===')
+    for line in selected[-120:]:
+        print(line)
+    print('=== Gradle tail ===')
+    for line in lines[-80:]:
+        print(line)
+    raise RuntimeError(f'Kotlin compile diagnostic failed with exit code {result.returncode}')
+
+print('Kotlin compile diagnostic passed')
