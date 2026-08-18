@@ -20,6 +20,7 @@ data class SystemVoiceSettings(
     val rate: Float,
     val pitch: Float,
     val volume: Float,
+    val voiceKey: String? = null,
 )
 
 object VoiceProfileStore {
@@ -111,6 +112,7 @@ object VoiceProfileStore {
                 "reference" to Diagnostics.wavInfo(profile.referenceFile),
             ),
         )
+        VoiceCatalog.notifyChanged(context, "voice_saved")
         return profile
     }
 
@@ -132,32 +134,48 @@ object VoiceProfileStore {
         val removed = dir.deleteRecursively()
         if (removed) {
             val settings = loadSettings(context)
-            if (settings.profileId == id) {
-                saveSettings(context, settings.copy(profileId = list(context).firstOrNull()?.id))
+            if (settings.profileId == id || settings.voiceKey == VoiceCatalog.savedKey(id)) {
+                val fallback = VoiceCatalog.default(context)
+                saveSettings(
+                    context,
+                    settings.copy(
+                        profileId = fallback?.profileId,
+                        voiceKey = fallback?.key,
+                    ),
+                )
             }
             Diagnostics.log("voice_profile", "voice_profile.deleted", data = mapOf("profile_id" to id))
+            VoiceCatalog.notifyChanged(context, "voice_deleted")
         }
         return removed
     }
 
     fun loadSettings(context: Context): SystemVoiceSettings {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val requested = prefs.getString("profile_id", null)
-        val validProfileId = requested?.takeIf { get(context, it) != null }
-            ?: list(context).firstOrNull()?.id
+        val requestedProfile = prefs.getString("profile_id", null)
+        val validProfileId = requestedProfile?.takeIf { get(context, it) != null }
+        val requestedVoiceKey = prefs.getString("voice_key", null)
+        val resolved = VoiceCatalog.find(context, requestedVoiceKey)
+            ?: validProfileId?.let { VoiceCatalog.find(context, VoiceCatalog.savedKey(it)) }
+            ?: VoiceCatalog.default(context)
         return SystemVoiceSettings(
-            profileId = validProfileId,
+            profileId = resolved?.profileId,
             rate = prefs.getFloat("rate", 1.0f).coerceIn(0.5f, 2.0f),
             pitch = prefs.getFloat("pitch", 1.0f).coerceIn(0.5f, 2.0f),
             volume = prefs.getFloat("volume", 1.0f).coerceIn(0.0f, 1.0f),
+            voiceKey = resolved?.key,
         )
     }
 
     fun saveSettings(context: Context, settings: SystemVoiceSettings) {
-        val profileId = settings.profileId?.takeIf { get(context, it) != null }
+        val requestedKey = settings.voiceKey
+            ?: settings.profileId?.let { VoiceCatalog.savedKey(it) }
+        val resolved = VoiceCatalog.find(context, requestedKey)
+            ?: VoiceCatalog.default(context)
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
-            .putString("profile_id", profileId)
+            .putString("voice_key", resolved?.key)
+            .putString("profile_id", resolved?.profileId)
             .putFloat("rate", settings.rate.coerceIn(0.5f, 2.0f))
             .putFloat("pitch", settings.pitch.coerceIn(0.5f, 2.0f))
             .putFloat("volume", settings.volume.coerceIn(0.0f, 1.0f))
@@ -166,7 +184,10 @@ object VoiceProfileStore {
             "system_tts",
             "system_tts.settings_saved",
             data = mapOf(
-                "profile_id" to profileId,
+                "voice_key" to resolved?.key,
+                "voice_label" to resolved?.label,
+                "voice_source" to resolved?.source?.name,
+                "profile_id" to resolved?.profileId,
                 "rate" to settings.rate,
                 "pitch" to settings.pitch,
                 "volume" to settings.volume,
