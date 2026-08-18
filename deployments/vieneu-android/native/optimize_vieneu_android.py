@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
-
 import pathlib
+import re
 import sys
 
 if len(sys.argv) != 2:
@@ -28,6 +28,13 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 
+def regex_once(text: str, pattern: str, replacement: str, label: str) -> str:
+    updated, count = re.subn(pattern, lambda _match: replacement, text, count=1, flags=re.DOTALL)
+    if count != 1:
+        raise RuntimeError(f'{label}: expected exactly one regex match, found {count}')
+    return updated
+
+
 header = replace_once(
     header,
     '''    V3NativeDenoiser denoiser_;
@@ -37,10 +44,6 @@ header = replace_once(
     '''    V3NativeDenoiser denoiser_;
     bool has_denoiser_ = false;
     std::vector<float> prompt_embeds_;
-
-
-
-
 
     bool reference_cache_valid_ = false;
     std::string reference_cache_path_;
@@ -166,26 +169,16 @@ acoustic_cpp = replace_once(
     acoustic_cpp,
     '''        use_ggml_heads = env_flag_enabled("VIENEU_ACOUSTIC_GGML_HEADS", true);
 ''',
-    '''
-
-        use_ggml_heads = true;
+    '''        use_ggml_heads = true;
 ''',
     'force GGML heads on Android',
 )
 
-backbone_cpp = replace_once(
+backbone_cpp = regex_once(
     backbone_cpp,
+    r'''    llama_context_params ctx_params = llama_context_default_params\(\);\n    ctx_params\.n_ctx = 2048;\n    ctx_params\.n_threads = n_threads;\n    ctx_params\.n_threads_batch = n_threads_batch;\n    ctx_params\.embeddings = true;[^\n]*\n    ctx_params\.no_perf = true;\n''',
     '''    llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = 2048;
-    ctx_params.n_threads = n_threads;
-    ctx_params.n_threads_batch = n_threads_batch;
-    ctx_params.embeddings = true;
-    ctx_params.no_perf = true;
-''',
-    '''    llama_context_params ctx_params = llama_context_default_params();
-    ctx_params.n_ctx = 2048;
-
-
     ctx_params.n_batch = 128;
     ctx_params.n_ubatch = 128;
     ctx_params.n_outputs_max = 128;
@@ -222,36 +215,10 @@ backbone_cpp = replace_once(
     'backbone prefill diagnostics',
 )
 
-backbone_cpp = replace_once(
+backbone_cpp = regex_once(
     backbone_cpp,
-    '''
-    clear_kv_cache();
-
-
-    std::memcpy(prefill_batch_.embd, embeds.data(), embeds.size() * sizeof(float));
-
-    for (int32_t i = 0; i < n_tokens; ++i) {
-        prefill_batch_.pos[i] = i;
-        prefill_batch_.n_seq_id[i] = 1;
-        prefill_batch_.seq_id[i][0] = 0;
-        prefill_batch_.logits[i] = (i == n_tokens - 1);
-    }
-    prefill_batch_.n_tokens = n_tokens;
-
-    int res = llama_decode(ctx_, prefill_batch_);
-
-    if (res != 0) {
-        std::cerr << "[V3NativeBackbone] Prefill failed with code: " << res << std::endl;
-        return false;
-    }
-
-    decoded_pos_ = n_tokens;
-''',
-    '''
-
-
-
-    clear_kv_cache();
+    r'''    [^;\n]*\n    clear_kv_cache\(\);\n\n    [^;\n]*\n    std::memcpy\(prefill_batch_\.embd, embeds\.data\(\), embeds\.size\(\) \* sizeof\(float\)\);\n\n    for \(int32_t i = 0; i < n_tokens; \+\+i\) \{\n        prefill_batch_\.pos\[i\] = i;\n        prefill_batch_\.n_seq_id\[i\] = 1;\n        prefill_batch_\.seq_id\[i\]\[0\] = 0;\n        prefill_batch_\.logits\[i\] = \(i == n_tokens - 1\);[^\n]*\n    \}\n    prefill_batch_\.n_tokens = n_tokens;\n\n    int res = llama_decode\(ctx_, prefill_batch_\);\n\n    if \(res != 0\) \{\n        std::cerr << "\[V3NativeBackbone\] Prefill failed with code: " << res << std::endl;\n        return false;\n    \}\n\n    decoded_pos_ = n_tokens;\n''',
+    '''    clear_kv_cache();
 
     constexpr int32_t kPrefillChunkTokens = 128;
     const bool diag = std::getenv("VIENEU_V3_NATIVE_BENCHMARK") != nullptr;

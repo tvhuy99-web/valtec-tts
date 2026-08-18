@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-
 import pathlib
 import sys
 
@@ -21,7 +20,7 @@ def replace_once(old: str, new: str, label: str) -> None:
 
 replace_once(
     '''void redirect_native_console(const std::string& dir) {\n''',
-    '''bool is_no_eos_error(const std::string& value) {\n    return value.find("VIENEU_NO_EOS") != std::string::npos;\n}\n\nvoid apply_tail_fade(std::vector<float>& audio, int sample_rate) {\n    if (audio.empty() || sample_rate <= 0) return;\n    const size_t fade_samples = (std::min)(\n        audio.size(),\n        static_cast<size_t>((std::max)(1, sample_rate / 50))); ''',
+    '''bool is_no_eos_error(const std::string& value) {\n    return value.find("VIENEU_NO_EOS") != std::string::npos;\n}\n\nvoid apply_tail_fade(std::vector<float>& audio, int sample_rate) {\n    if (audio.empty() || sample_rate <= 0) return;\n    const size_t fade_samples = (std::min)(\n        audio.size(),\n        static_cast<size_t>((std::max)(1, sample_rate / 50)));\n    const size_t start = audio.size() - fade_samples;\n    for (size_t i = 0; i < fade_samples; ++i) {\n        const float gain = static_cast<float>(fade_samples - i - 1) /\n                           static_cast<float>(fade_samples);\n        audio[start + i] *= gain;\n    }\n}\n\nvoid redirect_native_console(const std::string& dir) {\n''',
     'EOS and tail-fade helpers',
 )
 
@@ -39,7 +38,7 @@ replace_once(
 
 replace_once(
     '''        params.denoise_ref = true;\n        params.use_ref_codes = true;\n        params.apply_watermark = true;\n        params.max_chars = 384;\n        params.progress = [](const VieneuProgressEvent& event) { log_progress(event); };\n\n        std::ostringstream start_data;\n''',
-    '''        params.denoise_ref = true;\n        params.use_ref_codes = true;\n        params.apply_watermark = true;\n        params.max_chars = 120;\n        params.temperature = 0.8f;\n        params.top_k = 25;\n        params.top_p = 0.95f;\n        params.repetition_penalty = 1.2f;\n        ''',
+    '''        params.denoise_ref = true;\n        params.use_ref_codes = true;\n        params.apply_watermark = true;\n        params.max_chars = 120;\n        params.temperature = 0.8f;\n        params.top_k = 25;\n        params.top_p = 0.95f;\n        params.repetition_penalty = 1.2f;\n        params.max_new_frames = 300;\n        params.progress = [](const VieneuProgressEvent& event) { log_progress(event); };\n\n        std::ostringstream start_data;\n''',
     'restore upstream generation budget and quality settings',
 )
 
@@ -68,4 +67,10 @@ replace_once(
 )
 
 path.write_text(text, encoding='utf-8')
+
+final_text = path.read_text(encoding='utf-8')
+for fragment in ('apply_tail_fade', 'params.max_new_frames = 300;', 'params.progress = []', 'std::ostringstream start_data;'):
+    if fragment not in final_text:
+        raise RuntimeError(f'{path}: missing short-text policy fragment {fragment}')
+
 print('Applied strict EOS completion, retry policy and upstream frame budget')

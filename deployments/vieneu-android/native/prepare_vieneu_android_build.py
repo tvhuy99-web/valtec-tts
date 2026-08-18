@@ -73,6 +73,31 @@ def read_properties(path: Path) -> dict[str, str]:
     return values
 
 
+def normalize_changed_text(root: Path, relative_paths: list[str]) -> None:
+    for relative in relative_paths:
+        path = root / relative
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        output = []
+        for line in text.splitlines(keepends=True):
+            if line.endswith("\r\n"):
+                body, ending = line[:-2], "\r\n"
+            elif line.endswith("\n"):
+                body, ending = line[:-1], "\n"
+            elif line.endswith("\r"):
+                body, ending = line[:-1], "\r"
+            else:
+                body, ending = line, ""
+            output.append(body.rstrip(" \t") + ending)
+        normalized = "".join(output)
+        if normalized != text:
+            path.write_text(normalized, encoding="utf-8")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("source_dir")
@@ -147,11 +172,19 @@ def main() -> None:
     if v092_android_script.read_bytes() != v092_android_original:
         raise RuntimeError("v092 Android patch driver was not restored after materialization")
 
+    source_changed_all = [
+        line.strip()
+        for line in run_checked("git", "diff", "--name-only", cwd=source).splitlines()
+        if line.strip()
+    ]
     repo_changed_all = [
         line.strip()
         for line in run_checked("git", "diff", "--name-only", cwd=repo_root).splitlines()
         if line.strip()
     ]
+    normalize_changed_text(source, source_changed_all)
+    normalize_changed_text(repo_root, repo_changed_all)
+
     unexpected_repo_changes = [
         path
         for path in repo_changed_all

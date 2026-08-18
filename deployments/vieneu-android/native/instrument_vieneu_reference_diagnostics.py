@@ -20,8 +20,8 @@ def replace_once(old: str, new: str, label: str) -> None:
 
 
 replace_once(
-    '''#include <fstream>\n#include <stdexcept>\n''',
-    '''#include <cstdlib>\n#include <fstream>\n#include <iomanip>\n#include <iostream>\n#include <limits>\n#include <sstream>\n#include <stdexcept>\n''',
+    '''#include <fstream>\n#include <numeric>\n#include <stdexcept>\n''',
+    '''#include <cstdlib>\n#include <fstream>\n#include <iomanip>\n#include <iostream>\n#include <limits>\n#include <numeric>\n#include <sstream>\n#include <stdexcept>\n''',
     "reference diagnostic includes",
 )
 
@@ -98,8 +98,8 @@ double hz_to_mel(double hz) {
 )
 
 replace_once(
-    '''    std::vector<float> wav = v3_resample_linear(mono, sample_rate, kSpeakerRate);\n    if (wav.size() < kFrameLength) {\n''',
-    '''    std::vector<float> wav = v3_resample_linear(mono, sample_rate, kSpeakerRate);
+    '''    std::vector<float> wav = v3_resample_sinc(mono, sample_rate, kSpeakerRate, 64, 0.95, true, 14.769656459379492);\n    if (wav.size() < kFrameLength) {\n''',
+    '''    std::vector<float> wav = v3_resample_sinc(mono, sample_rate, kSpeakerRate, 64, 0.95, true, 14.769656459379492);
     std::cerr << "[V3NativeRefDeep] resample input_rate=" << sample_rate
               << " output_rate=" << kSpeakerRate
               << " input=" << reference_diag_summary(mono, 4)
@@ -144,4 +144,4 @@ replace_once(
 )
 
 path.write_text(text, encoding="utf-8")
-print("Instrumented and enabled raw dumps for native reference fbank and speaker encoder diagnostics")
+print("Instrumented native reference fbank and speaker encoder diagnostics")

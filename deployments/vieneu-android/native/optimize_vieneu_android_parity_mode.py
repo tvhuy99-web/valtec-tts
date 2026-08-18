@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-
 import sys
 from pathlib import Path
 
@@ -43,8 +42,8 @@ replace_once(
 )
 replace_once(
     jni,
-    "        params.repetition_penalty = 1.2f;\n        // Keep the native upstream safety budget.",
-    "        params.repetition_penalty = 1.2f;\n        if (deterministic_mode) {\n            params.temperature = 0.0f;\n            params.top_k = 1;\n            params.top_p = 1.0f;\n            params.repetition_penalty = 1.0f;\n        }\n        // Keep the native upstream safety budget.",
+    "        params.repetition_penalty = 1.2f;\n        params.max_new_frames = 300;",
+    "        params.repetition_penalty = 1.2f;\n        if (deterministic_mode) {\n            params.temperature = 0.0f;\n            params.top_k = 1;\n            params.top_p = 1.0f;\n            params.repetition_penalty = 1.0f;\n        }\n        params.max_new_frames = 300;",
     "configure deterministic sampling",
 )
 replace_once(

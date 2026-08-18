@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-
 import pathlib
 import sys
 
@@ -32,9 +31,6 @@ replace_once(
     'OpenCL registration and diagnostics helper',
 )
 
-
-
-
 replace_once(
     '''        model_dir_ = init.model_dir;\n        auto t_stage = std::chrono::high_resolution_clock::now();\n        if (!assets_.load(init.model_dir, error)) return false;\n''',
     '''        model_dir_ = init.model_dir;\n        const int opencl_device_count = register_and_probe_android_opencl();\n        if (opencl_device_count <= 0) {\n            error = "OpenCL GPU backend unavailable; CPU fallback is disabled for this build";\n            return false;\n        }\n        auto t_stage = std::chrono::high_resolution_clock::now();\n        if (!assets_.load(init.model_dir, error)) return false;\n''',
@@ -43,9 +39,15 @@ replace_once(
 
 replace_once(
     '''        backbone_params.n_threads = init.n_threads;\n        backbone_params.n_threads_batch = init.n_threads;\n        t_stage = std::chrono::high_resolution_clock::now();\n        if (!backbone_.initialize(backbone_params)) {\n''',
-    '''        backbone_params.n_threads = init.n_threads;\n        backbone_params.n_threads_batch = init.n_threads;\n        ''',
+    '''        backbone_params.n_threads = init.n_threads;\n        backbone_params.n_threads_batch = init.n_threads;\n        backbone_params.n_gpu_layers = 999;\n        std::cerr << "[V3NativeDiag] stage=opencl.backbone_offload"\n                  << " enabled=1 requested_layers=" << backbone_params.n_gpu_layers << "\\n";\n        t_stage = std::chrono::high_resolution_clock::now();\n        if (!backbone_.initialize(backbone_params)) {\n''',
     'enable OpenCL full backbone offload',
 )
 
 path.write_text(text, encoding='utf-8')
+
+final_text = path.read_text(encoding='utf-8')
+for fragment in ('backbone_params.n_gpu_layers = 999;', 'opencl.backbone_offload', 'register_and_probe_android_opencl()'):
+    if fragment not in final_text:
+        raise RuntimeError(f'{path}: missing OpenCL runtime fragment {fragment}')
+
 print('Applied Android OpenCL runtime probe and full semantic-backbone offload')
