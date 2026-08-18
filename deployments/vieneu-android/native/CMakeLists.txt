@@ -32,6 +32,25 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
+# The normal app keeps its canonical native-WAV transport. System TTS needs a
+# separate in-memory PCM ABI so TalkBack does not pay file write/fsync/read/parse
+# costs on every focus. Materialization already finished before CMake, so patch
+# the final generated JNI/Kotlin ABI here and fail configuration if it diverges.
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_LIST_DIR}/patch_vieneu_system_tts_fast_pcm.py"
+            "${CMAKE_CURRENT_LIST_DIR}/.."
+    RESULT_VARIABLE VIENEU_TTS_PCM_PATCH_RESULT
+    OUTPUT_VARIABLE VIENEU_TTS_PCM_PATCH_STDOUT
+    ERROR_VARIABLE VIENEU_TTS_PCM_PATCH_STDERR
+)
+if(NOT VIENEU_TTS_PCM_PATCH_RESULT EQUAL 0)
+    message(FATAL_ERROR
+        "System TTS direct PCM materialization failed:\n"
+        "${VIENEU_TTS_PCM_PATCH_STDOUT}\n${VIENEU_TTS_PCM_PATCH_STDERR}")
+endif()
+message(STATUS "${VIENEU_TTS_PCM_PATCH_STDOUT}")
+
 set(VIENEU_PORTABLE_CPU ON CACHE BOOL "" FORCE)
 set(GGML_CPU_ARM_ARCH "armv8.2-a+dotprod+fp16" CACHE STRING "" FORCE)
 set(VIENEU_NATIVE_BACKEND cpu CACHE STRING "" FORCE)
