@@ -12,6 +12,7 @@ on:
   push:
     branches:
       - dev
+      - agent/consolidate-vieneu-patch-and-cache-v3
     paths:
       - 'deployments/vieneu-android/**'
       - '.github/signing/vieneu-stable-debug.keystore.b64'
