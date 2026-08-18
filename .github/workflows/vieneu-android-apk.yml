@@ -158,8 +158,8 @@ jobs:
           git -C .build/vieneu-src diff --check
           git diff --check -- deployments/vieneu-android
           grep -n 'V3NativeDiag' .build/vieneu-src/src/vieneu/v3_native/vieneu_v3_native.cpp
-          grep -n 'kSpeakerCacheVersion = 3' .build/vieneu-src/src/vieneu/v3_native/vieneu_v3_native.cpp
-          grep -n 'persistent_v3' deployments/vieneu-android/native/vieneu_jni.cpp
+          grep -n 'kSpeakerCacheVersion = 4' .build/vieneu-src/src/vieneu/v3_native/vieneu_v3_native.cpp
+          grep -n 'persistent_v4' deployments/vieneu-android/native/vieneu_jni.cpp
           grep -n 'MessageDigest.getInstance("SHA-256")' deployments/vieneu-android/app/src/main/java/com/vieneu/voiceclone/MainActivity.kt
 
           if grep -n 'execute_process(' deployments/vieneu-android/native/CMakeLists.txt; then

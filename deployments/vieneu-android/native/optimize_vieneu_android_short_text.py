@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-
 import runpy
 import sys
 from pathlib import Path
@@ -66,8 +65,9 @@ required = (
     "deterministic_frame_cap = 96",
     "max_attempts = deterministic_mode ? 1 : 2",
     "VIENEU_NO_EOS",
-    "stable_request_no_eos_retry",
+    "fresh_normal_stable_deterministic",
     "rejects_early_eos\\\":false",
+    "sampling_seed_forced",
     "stop_reason",
     "full_cleaned_reference",
     "params.voice_id",
@@ -85,6 +85,7 @@ forbidden = (
     "upstream_cpu_f32",
     "params.repetition_penalty = 1.0f",
     "const int frame_caps[] = {300, 450};",
+    "stable_request_no_eos_retry",
 )
 found = [fragment for fragment in forbidden if fragment in text]
 if missing or found:
@@ -93,7 +94,6 @@ if missing or found:
     )
 
 print(
-    "Validated generated JNI/UI: fast OpenCL F32, immediate EOS, one-pass "
-    "deterministic chunks, persistent speaker cache, pronunciation controls, "
-    "complete diagnostics reset and cleaned interface"
+    "Validated generated JNI/UI: fast OpenCL F32, fresh normal sampling, deterministic parity, "
+    "persistent speaker cache, pronunciation controls and cleaned interface"
 )
