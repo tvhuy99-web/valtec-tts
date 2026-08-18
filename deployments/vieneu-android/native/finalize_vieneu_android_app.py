@@ -95,8 +95,12 @@ replace_once(
 )
 replace_once(
     activity,
-    "                engineReady = false\n",
-    '                VieNeuEngine.invalidate("model_download_complete")\n',
+    '''                engineReady = false
+                span.end(true, mapOf("model" to Diagnostics.modelSnapshot(ModelManager.modelDir(this))))
+''',
+    '''                VieNeuEngine.invalidate("model_download_complete")
+                span.end(true, mapOf("model" to Diagnostics.modelSnapshot(ModelManager.modelDir(this))))
+''',
     "invalidate process engine after model download",
 )
 replace_once(
