@@ -107,6 +107,23 @@ def main() -> None:
     if v092_android_script.read_bytes() != v092_android_original:
         raise RuntimeError("v092 Android patch driver was not restored after materialization")
 
+    repo_changed_all = [
+        line.strip()
+        for line in run_checked("git", "diff", "--name-only", cwd=repo_root).splitlines()
+        if line.strip()
+    ]
+    unexpected_repo_changes = [
+        path
+        for path in repo_changed_all
+        if not path.startswith("deployments/vieneu-android/app/")
+        and path != "deployments/vieneu-android/native/vieneu_jni.cpp"
+    ]
+    if unexpected_repo_changes:
+        raise RuntimeError(
+            "Materialization modified build tooling instead of only generated Android sources: "
+            + ", ".join(unexpected_repo_changes)
+        )
+
     run_checked("git", "diff", "--check", cwd=source)
     run_checked("git", "submodule", "foreach", "--recursive", "git diff --check", cwd=source)
     run_checked("git", "diff", "--check", "--", "deployments/vieneu-android", cwd=repo_root)
@@ -158,17 +175,10 @@ def main() -> None:
         if line.strip()
     ]
     android_files = [
-        line.strip()
-        for line in run_checked(
-            "git",
-            "diff",
-            "--name-only",
-            "--",
-            "deployments/vieneu-android/app",
-            "deployments/vieneu-android/native/vieneu_jni.cpp",
-            cwd=repo_root,
-        ).splitlines()
-        if line.strip()
+        path
+        for path in repo_changed_all
+        if path.startswith("deployments/vieneu-android/app/")
+        or path == "deployments/vieneu-android/native/vieneu_jni.cpp"
     ]
 
     manifest = {
