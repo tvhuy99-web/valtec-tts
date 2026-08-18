@@ -59,9 +59,8 @@ gradle = app / 'build.gradle.kts'
 if not gradle.is_file():
     raise RuntimeError(f'Missing Android Gradle file: {gradle}')
 
-# Temporary CI diagnostic: run only the Kotlin compilation task here so the
-# actual compiler error is emitted in a compact form before the very large
-# assembleDebug log can be truncated by the connector.
+# Temporary CI diagnostic: compile Kotlin here and surface the exact compiler
+# failure in one short Python exception so connector log truncation cannot hide it.
 android_root = app.parent
 gradlew = android_root / 'gradlew'
 if not gradlew.is_file():
@@ -77,24 +76,22 @@ result = subprocess.run(
 )
 if result.returncode != 0:
     lines = result.stdout.splitlines()
-    needles = (
-        'e: ',
-        'error:',
-        'FAILURE:',
-        'What went wrong',
-        'Execution failed for task',
-        'Compilation error',
-        'Unresolved reference',
-        'Smart cast',
-        '.kt:',
-    )
-    selected = [line for line in lines if any(needle in line for needle in needles)]
-    print('=== Kotlin compile diagnostic ===')
-    for line in selected[-120:]:
-        print(line)
-    print('=== Gradle tail ===')
-    for line in lines[-80:]:
-        print(line)
-    raise RuntimeError(f'Kotlin compile diagnostic failed with exit code {result.returncode}')
+    selected = [
+        line.strip()
+        for line in lines
+        if (
+            line.lstrip().startswith('e:')
+            or ' error:' in line.lower()
+            or 'Unresolved reference' in line
+            or 'Smart cast' in line
+            or '.kt:' in line
+            or 'Execution failed for task' in line
+            or 'Compilation error' in line
+        )
+    ]
+    compact = ' || '.join(selected[-12:])
+    if not compact:
+        compact = ' || '.join(line.strip() for line in lines[-12:])
+    raise RuntimeError(f'KOTLIN_ERROR: {compact[:6000]}')
 
 print('Kotlin compile diagnostic passed')
