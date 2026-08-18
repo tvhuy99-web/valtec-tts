@@ -60,6 +60,19 @@ def verify_pinned_submodules(source: Path) -> None:
         )
 
 
+def read_properties(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            raise RuntimeError(f"Invalid properties line in {path}: {raw!r}")
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip()
+    return values
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("source_dir")
@@ -127,6 +140,7 @@ def main() -> None:
     run_script(native_dir / "patch_llama_opencl_qcom_shuffle.py", str(source))
     run_script(native_dir / "optimize_vieneu_android_cache_v3.py", str(source), str(android_root))
     run_script(native_dir / "finalize_vieneu_android_direct_wav.py", str(android_root))
+    run_script(native_dir / "finalize_vieneu_android_app.py", str(android_root))
 
     if v092_source_script.read_bytes() != v092_source_original:
         raise RuntimeError("v092 source patch driver was not restored after materialization")
@@ -207,8 +221,15 @@ def main() -> None:
         or path == "deployments/vieneu-android/native/vieneu_jni.cpp"
     ]
 
+    version_values = read_properties(android_root / "version.properties")
+    try:
+        app_version_code = int(version_values["VERSION_CODE"])
+        app_version_name = version_values["VERSION_NAME"]
+    except (KeyError, ValueError) as exc:
+        raise RuntimeError("version.properties must define VERSION_CODE and VERSION_NAME") from exc
+
     manifest = {
-        "schema": 2,
+        "schema": 3,
         "upstream_revision": actual_revision,
         "source_patch_sha256": sha256_bytes(source_patch),
         "source_patch_bytes": len(source_patch),
@@ -220,6 +241,10 @@ def main() -> None:
         "acoustic_runtime": "opencl-f32-canonical",
         "audio_transport": "native-wav-pcm16",
         "java_audio_buffer_bytes": 0,
+        "engine_scope": "process",
+        "version_source": "deployments/vieneu-android/version.properties",
+        "app_version_code": app_version_code,
+        "app_version_name": app_version_name,
     }
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
