@@ -239,9 +239,9 @@ replace_once(
         t_ref_stage = std::chrono::high_resolution_clock::now();
         std::vector<float> mono48 = v3_resample_sinc(wav.mono, wav.sample_rate, sample_rate(), 6, 0.99, false, 0.0);
 ''',
-    '''    if (use_ref_codes && !reference_codes_cache_hit) {
-        std::cout << "[V3NativeCache] reference_codes=miss path=\""
-                  << reference_codes_cache_path(ref_audio_path) << "\"\n";
+    r'''    if (use_ref_codes && !reference_codes_cache_hit) {
+        std::cout << "[V3NativeCache] reference_codes=miss path="
+                  << reference_codes_cache_path(ref_audio_path) << "\n";
         t_ref_stage = std::chrono::high_resolution_clock::now();
         std::vector<float> mono48 = v3_resample_sinc(wav.mono, wav.sample_rate, sample_rate(), 6, 0.99, false, 0.0);
 ''',
