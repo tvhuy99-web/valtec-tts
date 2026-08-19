@@ -167,10 +167,9 @@ def main() -> None:
     run_script(native_dir / "finalize_vieneu_android_direct_wav.py", str(android_root))
     run_script(native_dir / "finalize_vieneu_android_app.py", str(android_root))
 
-    # System TTS needs a second transport beside the normal app's canonical WAV
-    # path. Materialize it only after the final app/JNI ABI is known, but before
-    # diffs/manifests are captured. This keeps CMake purely declarative and gives
-    # CI a reproducible reviewed source diff for the direct in-memory PCM path.
+    # System TTS gets direct in-memory PCM plus an optional same-utterance prefix
+    # callback for A/B latency testing. The callback is request-local, never a
+    # process-global mutable sink, because Android may recreate TTS services.
     run_script(native_dir / "patch_vieneu_system_tts_fast_pcm.py", str(android_root))
 
     if v092_source_script.read_bytes() != v092_source_original:
@@ -206,25 +205,45 @@ def main() -> None:
     final_native_kt = android_root / "app/src/main/java/com/vieneu/voiceclone/VieNeuNative.kt"
     final_jni = android_root / "native/vieneu_jni.cpp"
     final_service = android_root / "app/src/main/java/com/vieneu/voiceclone/VieNeuTtsService.kt"
+    final_settings = android_root / "app/src/main/java/com/vieneu/voiceclone/SystemVoiceSettingsActivity.kt"
+    final_layout = android_root / "app/src/main/res/layout/activity_system_voice_settings.xml"
     direct_contract = {
-        final_native_kt: ("synthesizeDirect(text: String", "dialect: String): FloatArray?"),
+        final_native_kt: (
+            "synthesizeDirect(text: String",
+            "streamSink: NativePcmStreamSink?): FloatArray?",
+        ),
         final_jni: (
             "Java_com_vieneu_voiceclone_VieNeuNative_synthesizeDirect",
+            "jobject stream_sink",
+            "onNativePcmChunk",
+            "params.stream_first_frames = 2",
             "jni_float_direct",
             "SetFloatArrayRegion",
         ),
         final_service: (
             "VieNeuNative.synthesizeDirect(",
             "system_tts.pcm_cache.hit",
+            "system_tts.early_playback.fallback",
+            "system_tts.callback_rejected_as_cancel",
             '"utterance_split" to false',
             '"audio_transport" to "jni_float_direct"',
+            '"audio_transport" to "jni_float_stream"',
         ),
+        final_settings: ("earlyPlaybackSwitch", "settings.earlyPlayback"),
+        final_layout: ("earlyPlaybackSwitch", "Phát sớm khi đang tạo (A/B)"),
     }
     for path, fragments in direct_contract.items():
         text = path.read_text(encoding="utf-8")
         missing = [fragment for fragment in fragments if fragment not in text]
         if missing:
-            raise RuntimeError(f"Direct System TTS materialization contract missing in {path}: {missing}")
+            raise RuntimeError(f"Direct/early System TTS materialization contract missing in {path}: {missing}")
+
+    forbidden_global_sink = ("g_stream_sink", "setStreamSink(", "Java_com_vieneu_voiceclone_VieNeuNative_setStreamSink")
+    for path in (final_native_kt, final_jni):
+        text = path.read_text(encoding="utf-8")
+        found = [fragment for fragment in forbidden_global_sink if fragment in text]
+        if found:
+            raise RuntimeError(f"Unsafe global System TTS stream sink survived in {path}: {found}")
 
     run_checked("git", "diff", "--check", cwd=source)
     run_checked("git", "submodule", "foreach", "--recursive", "git diff --check", cwd=source)
@@ -305,6 +324,11 @@ def main() -> None:
         "system_tts_audio_transport": "jni-f32-direct",
         "system_tts_utterance_split": False,
         "system_tts_pcm_cache": "exact-lru",
+        "system_tts_early_playback_ab": True,
+        "system_tts_early_playback_default": False,
+        "system_tts_early_playback_transport": "jni-f32-prefix",
+        "system_tts_early_playback_same_utterance": True,
+        "system_tts_early_playback_sink_scope": "request",
         "java_audio_buffer_bytes": 0,
         "engine_scope": "process",
         "version_source": "deployments/vieneu-android/version.properties",
