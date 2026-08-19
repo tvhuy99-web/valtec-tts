@@ -156,6 +156,7 @@ def main() -> None:
 
     run_script(native_dir / "optimize_vieneu_android_acoustic_opencl.py", str(source))
     run_script(native_dir / "optimize_vieneu_android_generation_quality.py", str(source))
+    run_script(native_dir / "optimize_vieneu_android_acoustic_fused_post_attn.py", str(source))
 
     with preserve_file(v092_android_script):
         run_script(native_dir / "optimize_vieneu_android_short_text.py", str(native_dir / "vieneu_jni.cpp"))
@@ -235,6 +236,31 @@ def main() -> None:
 
     acoustic_source = source / "src/vieneu/v3_native/v3_native_acoustic_ggml.cpp"
     acoustic_text = acoustic_source.read_text(encoding="utf-8")
+
+    fused_post_attn_contract = (
+        "class GgmlPostAttentionOp",
+        "ops.post_attn.initialize(",
+        "ops.post_attn.run(",
+        "ggml_rms_norm(ctx_, residual, rms_norm_eps)",
+        "OpenCL fused post-attention graph compute failed.",
+        "host_roundtrip_between_o_and_ffn=0",
+        "fused_post_attn_ms",
+    )
+    missing_fused = [fragment for fragment in fused_post_attn_contract if fragment not in acoustic_text]
+    if missing_fused:
+        raise RuntimeError(f"Fused F32 post-attention materialization missing: {missing_fused}")
+
+    forbidden_separate_post_attn = (
+        "ops.o_proj.run(",
+        "ops.ffn.run(",
+        "ops.ff_gate.run(",
+        "ops.ff_up.run(",
+        "ops.ff_down.run(",
+    )
+    found_separate = [fragment for fragment in forbidden_separate_post_attn if fragment in acoustic_text]
+    if found_separate:
+        raise RuntimeError(f"Separate host-roundtrip post-attention path survived fusion: {found_separate}")
+
     forbidden_batch2 = (
         "run_batch2(const float* input",
         "ops.qkv.run_batch2",
@@ -337,8 +363,9 @@ def main() -> None:
         "android_patch_bytes": len(android_patch),
         "android_changed_files": android_files,
         "reference_cache": "content-addressed-v4",
-        "acoustic_runtime": "opencl-f32-canonical",
+        "acoustic_runtime": "opencl-f32-fused-post-attn",
         "acoustic_initial_token_batch": 1,
+        "acoustic_post_attention_graph": "o-proj-residual-rmsnorm2-ffn-residual",
         "audio_transport": "native-wav-pcm16",
         "system_tts_audio_transport": "jni-f32-direct",
         "system_tts_utterance_split": False,
