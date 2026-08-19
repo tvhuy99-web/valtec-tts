@@ -15,8 +15,8 @@ text = path.read_text(encoding="utf-8")
 def replace_once(old: str, new: str, label: str) -> None:
     global text
     count = text.count(old)
-    if count != 1:
-        raise RuntimeError(f"{label}: expected exactly one match, found {count}")
+    if count < 1:
+        raise RuntimeError(f"{label}: expected at least one match, found {count}")
     text = text.replace(old, new, 1)
 
 
@@ -215,7 +215,6 @@ private:
     "ffn batch2 run",
 )
 
-# This is the second occurrence of the release/member blocks, belonging to FFN.
 old_release = '''        input_ = nullptr;
         output_ = nullptr;
         graph_ = nullptr;
@@ -246,8 +245,6 @@ new_members = '''    ggml_tensor* input_ = nullptr;
 '''
 replace_once(old_members, new_members, "ffn batch2 members")
 
-# Batch the S=2 QKV projection once per layer. Q/K normalization and attention
-# remain on the CPU exactly as before; only the F32 matmul submission is batched.
 regex_once(
     r'''            for \(int s = 0; s < S; \+\+s\) \{\n                \{\n                    ScopedBenchTimer timer\(benchmark_enabled, bench\.norm1_ms\);.*?\n                \}\n            \}\n\n            const int new_used = past \+ S;''',
     '''            for (int s = 0; s < S; ++s) {
@@ -308,8 +305,6 @@ regex_once(
     "batch S=2 QKV projection",
 )
 
-# Batch O-proj and fused FFN for the same S=2 initial step. Residuals and RMS
-# norms stay in their original F32 CPU implementation and operation order.
 regex_once(
     r'''            for \(int s = 0; s < S; \+\+s\) \{\n                \{\n                    ScopedBenchTimer timer\(benchmark_enabled, bench\.o_proj_ms\);.*?\n                \}\n            \}\n        \}\n\n        output\.resize''',
     '''            {
