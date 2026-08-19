@@ -232,6 +232,18 @@ def main() -> None:
         if missing:
             raise RuntimeError(f"Direct System TTS materialization contract missing in {path}: {missing}")
 
+    acoustic_source = source / "src/vieneu/v3_native/v3_native_acoustic_ggml.cpp"
+    acoustic_text = acoustic_source.read_text(encoding="utf-8")
+    acoustic_contract = (
+        "ops.qkv.run_batch2",
+        "ops.o_proj.run_batch2",
+        "ops.ffn.run_batch2",
+        "OpenCL acoustic linear batch2 graph compute failed",
+    )
+    missing_acoustic = [fragment for fragment in acoustic_contract if fragment not in acoustic_text]
+    if missing_acoustic:
+        raise RuntimeError(f"F32 acoustic batch2 materialization missing: {missing_acoustic}")
+
     forbidden_early_audio = (
         "NativePcmStreamSink",
         "earlyPlayback",
@@ -322,7 +334,8 @@ def main() -> None:
         "android_patch_bytes": len(android_patch),
         "android_changed_files": android_files,
         "reference_cache": "content-addressed-v4",
-        "acoustic_runtime": "opencl-f32-canonical",
+        "acoustic_runtime": "opencl-f32-canonical-batch2",
+        "acoustic_initial_token_batch": 2,
         "audio_transport": "native-wav-pcm16",
         "system_tts_audio_transport": "jni-f32-direct",
         "system_tts_utterance_split": False,
