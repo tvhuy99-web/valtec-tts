@@ -289,32 +289,4 @@ missing = [fragment for fragment in required if fragment not in final_text]
 if missing:
     raise RuntimeError(f'System TTS process-state patch missing fragments: {missing}')
 
-# Deep diagnostics intentionally logs codec output between codec_.decode() and the
-# normal decode_audio progress line. The optional early-audio materializer uses
-# those two statements as a strict anchor. Reorder only the diagnostic statement
-# so the anchor is contiguous; diagnostic content and runtime behavior are kept.
-source_engine = (
-    android_root.parent.parent
-    / '.build/vieneu-src/src/vieneu/v3_native/vieneu_v3_native.cpp'
-).resolve()
-if source_engine.is_file():
-    engine_text = source_engine.read_text(encoding='utf-8')
-    old_codec = '''        bool ok = codec_.decode(frames, static_cast<int64_t>(frames.size() / config_.n_vq), out_audio, error);
-        std::cerr << "[V3NativeDeep] codec.output ok=" << (ok ? 1 : 0)
-                  << " generated_frames=" << (config_.n_vq > 0 ? frames.size() / static_cast<size_t>(config_.n_vq) : 0)
-                  << " audio=" << diag_float_summary(out_audio) << "\\n";
-        if (ok) vieneu_report_progress(params.progress, "decode_audio", 1, 1, scaled_progress(0.96f), "V3 native audio decode complete.");
-'''
-    new_codec = '''        bool ok = codec_.decode(frames, static_cast<int64_t>(frames.size() / config_.n_vq), out_audio, error);
-        if (ok) vieneu_report_progress(params.progress, "decode_audio", 1, 1, scaled_progress(0.96f), "V3 native audio decode complete.");
-        std::cerr << "[V3NativeDeep] codec.output ok=" << (ok ? 1 : 0)
-                  << " generated_frames=" << (config_.n_vq > 0 ? frames.size() / static_cast<size_t>(config_.n_vq) : 0)
-                  << " audio=" << diag_float_summary(out_audio) << "\\n";
-'''
-    count = engine_text.count(old_codec)
-    if count != 1:
-        raise RuntimeError(f'early-audio codec anchor normalization: expected one match, found {count}')
-    source_engine.write_text(engine_text.replace(old_codec, new_codec, 1), encoding='utf-8')
-    print('Normalized deep codec diagnostic anchor for optional early audio')
-
 print('Applied process-wide System TTS cancellation, warm arbitration and PCM cache state')
