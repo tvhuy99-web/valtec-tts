@@ -49,6 +49,7 @@ def apply_post_direct_patches() -> None:
         str(materialized_source_dir()),
         str(root),
     )
+    run_patch(here / "patch_vieneu_system_tts_ab_cache.py", str(root))
 
 
 kt_text = native_kt.read_text(encoding="utf-8")
