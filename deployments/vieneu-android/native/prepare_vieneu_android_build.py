@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-
 import argparse
 import contextlib
 import hashlib
@@ -157,6 +156,7 @@ def main() -> None:
 
     run_script(native_dir / "optimize_vieneu_android_acoustic_opencl.py", str(source))
     run_script(native_dir / "optimize_vieneu_android_generation_quality.py", str(source))
+    run_script(native_dir / "optimize_vieneu_android_acoustic_fused_post_attn.py", str(source))
 
     with preserve_file(v092_android_script):
         run_script(native_dir / "optimize_vieneu_android_short_text.py", str(native_dir / "vieneu_jni.cpp"))
@@ -166,6 +166,11 @@ def main() -> None:
     run_script(native_dir / "optimize_vieneu_android_cache_v4.py", str(source), str(android_root))
     run_script(native_dir / "finalize_vieneu_android_direct_wav.py", str(android_root))
     run_script(native_dir / "finalize_vieneu_android_app.py", str(android_root))
+
+    # System TTS uses only the canonical full-buffer direct PCM transport.
+    # Early/prefix PCM was deliberately removed after device A/B testing found
+    # audible stutter. Do not reintroduce a streaming callback here.
+    run_script(native_dir / "patch_vieneu_system_tts_fast_pcm.py", str(android_root))
 
     if v092_source_script.read_bytes() != v092_source_original:
         raise RuntimeError("v092 source patch driver was not restored after materialization")
@@ -196,6 +201,93 @@ def main() -> None:
             "Materialization modified build tooling instead of only generated Android sources: "
             + ", ".join(unexpected_repo_changes)
         )
+
+    final_native_kt = android_root / "app/src/main/java/com/vieneu/voiceclone/VieNeuNative.kt"
+    final_jni = android_root / "native/vieneu_jni.cpp"
+    final_service = android_root / "app/src/main/java/com/vieneu/voiceclone/VieNeuTtsService.kt"
+    final_store = android_root / "app/src/main/java/com/vieneu/voiceclone/VoiceProfileStore.kt"
+    final_settings = android_root / "app/src/main/java/com/vieneu/voiceclone/SystemVoiceSettingsActivity.kt"
+    final_layout = android_root / "app/src/main/res/layout/activity_system_voice_settings.xml"
+
+    direct_contract = {
+        final_native_kt: (
+            "synthesizeDirect(text: String",
+            "dialect: String): FloatArray?",
+        ),
+        final_jni: (
+            "Java_com_vieneu_voiceclone_VieNeuNative_synthesizeDirect",
+            "jni_float_direct",
+            "SetFloatArrayRegion",
+        ),
+        final_service: (
+            "VieNeuNative.synthesizeDirect(",
+            "system_tts.pcm_cache.hit",
+            "system_tts.warm.preempt_requested",
+            '"outcome" to "cancelled"',
+            '"utterance_split" to false',
+            '"audio_transport" to "jni_float_direct"',
+        ),
+    }
+    for path, fragments in direct_contract.items():
+        text = path.read_text(encoding="utf-8")
+        missing = [fragment for fragment in fragments if fragment not in text]
+        if missing:
+            raise RuntimeError(f"Direct System TTS materialization contract missing in {path}: {missing}")
+
+    acoustic_source = source / "src/vieneu/v3_native/v3_native_acoustic_ggml.cpp"
+    acoustic_text = acoustic_source.read_text(encoding="utf-8")
+
+    fused_post_attn_contract = (
+        "class GgmlPostAttentionOp",
+        "ops.post_attn.initialize(",
+        "ops.post_attn.run(",
+        "ggml_rms_norm(ctx_, residual, rms_norm_eps)",
+        "OpenCL fused post-attention graph compute failed.",
+        "host_roundtrip_between_o_and_ffn=0",
+        "fused_post_attn_ms",
+    )
+    missing_fused = [fragment for fragment in fused_post_attn_contract if fragment not in acoustic_text]
+    if missing_fused:
+        raise RuntimeError(f"Fused F32 post-attention materialization missing: {missing_fused}")
+
+    forbidden_separate_post_attn = (
+        "ops.o_proj.run(",
+        "ops.ffn.run(",
+        "ops.ff_gate.run(",
+        "ops.ff_up.run(",
+        "ops.ff_down.run(",
+    )
+    found_separate = [fragment for fragment in forbidden_separate_post_attn if fragment in acoustic_text]
+    if found_separate:
+        raise RuntimeError(f"Separate host-roundtrip post-attention path survived fusion: {found_separate}")
+
+    forbidden_batch2 = (
+        "run_batch2(const float* input",
+        "ops.qkv.run_batch2",
+        "ops.o_proj.run_batch2",
+        "ops.ffn.run_batch2",
+        "OpenCL acoustic linear batch2 graph compute failed",
+        "OpenCL acoustic FFN batch2 graph compute failed",
+    )
+    found_batch2 = [fragment for fragment in forbidden_batch2 if fragment in acoustic_text]
+    if found_batch2:
+        raise RuntimeError(f"Regressive F32 acoustic batch2 path survived materialization: {found_batch2}")
+
+    forbidden_early_audio = (
+        "NativePcmStreamSink",
+        "earlyPlayback",
+        "early_playback",
+        "jni_float_stream",
+        "onNativePcmChunk",
+        "stream_first_frames",
+        "VIENEU_STREAM_ABORTED",
+        "Phát sớm khi đang tạo",
+    )
+    for path in (final_native_kt, final_jni, final_service, final_store, final_settings, final_layout):
+        text = path.read_text(encoding="utf-8")
+        found = [fragment for fragment in forbidden_early_audio if fragment in text]
+        if found:
+            raise RuntimeError(f"Removed early-audio path survived in {path}: {found}")
 
     run_checked("git", "diff", "--check", cwd=source)
     run_checked("git", "submodule", "foreach", "--recursive", "git diff --check", cwd=source)
@@ -271,8 +363,14 @@ def main() -> None:
         "android_patch_bytes": len(android_patch),
         "android_changed_files": android_files,
         "reference_cache": "content-addressed-v4",
-        "acoustic_runtime": "opencl-f32-canonical",
+        "acoustic_runtime": "opencl-f32-fused-post-attn",
+        "acoustic_initial_token_batch": 1,
+        "acoustic_post_attention_graph": "o-proj-residual-rmsnorm2-ffn-residual",
         "audio_transport": "native-wav-pcm16",
+        "system_tts_audio_transport": "jni-f32-direct",
+        "system_tts_utterance_split": False,
+        "system_tts_pcm_cache": "exact-lru",
+        "system_tts_early_playback_ab": False,
         "java_audio_buffer_bytes": 0,
         "engine_scope": "process",
         "version_source": "deployments/vieneu-android/version.properties",

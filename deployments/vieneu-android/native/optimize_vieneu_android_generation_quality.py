@@ -107,4 +107,10 @@ missing = [fragment for fragment in required if fragment not in final]
 if missing:
     raise RuntimeError(f'denoiser ORT output fix missing fragments {missing}')
 
-print('Applied VieNeu generation quality core and preallocated ONNX denoiser outputs')
+system_tts_core = native_dir / 'optimize_vieneu_android_system_tts_core.py'
+runpy.run_path(str(system_tts_core), run_name='__main__')
+
+system_tts_ui = native_dir / 'patch_vieneu_android_system_tts_ui.py'
+runpy.run_path(str(system_tts_ui), run_name='__main__')
+
+print('Applied VieNeu generation quality core, preallocated ONNX denoiser outputs, system-TTS cancellation and UI hooks')
