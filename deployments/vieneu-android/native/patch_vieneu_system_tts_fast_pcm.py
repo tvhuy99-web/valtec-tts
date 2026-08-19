@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-import os
 import pathlib
 import re
 import runpy
@@ -29,27 +28,9 @@ def run_patch(path: pathlib.Path, *arguments: str) -> None:
         sys.argv = saved_argv
 
 
-def materialized_source_dir() -> pathlib.Path:
-    override = os.environ.get("VIENEU_MATERIALIZED_SOURCE_DIR", "").strip()
-    source = pathlib.Path(override).resolve() if override else (root.parent.parent / ".build/vieneu-src").resolve()
-    marker = source / "src/vieneu/v3_native/vieneu_v3_native.cpp"
-    if not marker.is_file():
-        raise RuntimeError(
-            "Unable to locate materialized VieNeu source for System TTS early-audio patch: "
-            + str(source)
-        )
-    return source
-
-
 def apply_post_direct_patches() -> None:
     here = pathlib.Path(__file__).resolve().parent
     run_patch(here / "patch_vieneu_system_tts_process_state.py", str(root))
-    run_patch(
-        here / "patch_vieneu_system_tts_early_audio_v2.py",
-        str(materialized_source_dir()),
-        str(root),
-    )
-    run_patch(here / "patch_vieneu_system_tts_ab_cache.py", str(root))
 
 
 kt_text = native_kt.read_text(encoding="utf-8")
@@ -182,5 +163,16 @@ missing = [fragment for text, fragment in required if fragment not in text]
 if missing:
     raise RuntimeError(f"Direct System TTS PCM fragments missing after patch: {missing}")
 
-print("Materialized direct in-memory F32 PCM JNI path for Android System TTS")
+forbidden = (
+    "NativePcmStreamSink",
+    "early_playback",
+    "jni_float_stream",
+    "VIENEU_STREAM_ABORTED",
+)
+for path, text in ((native_kt, final_kt), (jni, final_jni)):
+    found = [fragment for fragment in forbidden if fragment in text]
+    if found:
+        raise RuntimeError(f"Removed early-audio path survived in {path}: {found}")
+
+print("Materialized full-buffer direct in-memory F32 PCM for Android System TTS")
 apply_post_direct_patches()
