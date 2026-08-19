@@ -235,15 +235,17 @@ def main() -> None:
 
     acoustic_source = source / "src/vieneu/v3_native/v3_native_acoustic_ggml.cpp"
     acoustic_text = acoustic_source.read_text(encoding="utf-8")
-    acoustic_contract = (
+    forbidden_batch2 = (
+        "run_batch2(const float* input",
         "ops.qkv.run_batch2",
         "ops.o_proj.run_batch2",
         "ops.ffn.run_batch2",
         "OpenCL acoustic linear batch2 graph compute failed",
+        "OpenCL acoustic FFN batch2 graph compute failed",
     )
-    missing_acoustic = [fragment for fragment in acoustic_contract if fragment not in acoustic_text]
-    if missing_acoustic:
-        raise RuntimeError(f"F32 acoustic batch2 materialization missing: {missing_acoustic}")
+    found_batch2 = [fragment for fragment in forbidden_batch2 if fragment in acoustic_text]
+    if found_batch2:
+        raise RuntimeError(f"Regressive F32 acoustic batch2 path survived materialization: {found_batch2}")
 
     forbidden_early_audio = (
         "NativePcmStreamSink",
@@ -335,8 +337,8 @@ def main() -> None:
         "android_patch_bytes": len(android_patch),
         "android_changed_files": android_files,
         "reference_cache": "content-addressed-v4",
-        "acoustic_runtime": "opencl-f32-canonical-batch2",
-        "acoustic_initial_token_batch": 2,
+        "acoustic_runtime": "opencl-f32-canonical",
+        "acoustic_initial_token_batch": 1,
         "audio_transport": "native-wav-pcm16",
         "system_tts_audio_transport": "jni-f32-direct",
         "system_tts_utterance_split": False,
