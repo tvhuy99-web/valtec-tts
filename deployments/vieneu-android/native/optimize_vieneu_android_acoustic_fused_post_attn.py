@@ -199,11 +199,14 @@ replace_once(
     "replace separate O-proj/FFN layer ops with fused post-attention op",
 )
 
+# optimize_vieneu_android.py runs before this patch and intentionally forces
+# GGML heads on Android, so anchor the already-materialized `use_ggml_heads = true`
+# form rather than the pristine upstream environment-controlled line.
 replace_once(
     '''        const int H = config.hidden_size;
         const int I = config.local_intermediate_size;
         const bool fuse = env_flag_enabled("VIENEU_GGML_FUSE_FFN", true);
-        use_ggml_heads = env_flag_enabled("VIENEU_ACOUSTIC_GGML_HEADS", true);
+        use_ggml_heads = true;
         layer_ops.clear();
         layer_ops.resize(w.layers.size());
         for (size_t i = 0; i < w.layers.size(); ++i) {
@@ -223,7 +226,7 @@ replace_once(
 ''',
     '''        const int H = config.hidden_size;
         const int I = config.local_intermediate_size;
-        use_ggml_heads = env_flag_enabled("VIENEU_ACOUSTIC_GGML_HEADS", true);
+        use_ggml_heads = true;
         layer_ops.clear();
         layer_ops.resize(w.layers.size());
         for (size_t i = 0; i < w.layers.size(); ++i) {
@@ -312,6 +315,18 @@ replace_once(
     "report fused post-attention benchmark",
 )
 
+replace_once(
+    '''        b.reset_cache_ms + b.cached_step_ms + b.sample_head_matvec_ms +
+        b.sample_head_ggml_ms + b.sample_select_ms + b.eos_head_matvec_ms +
+        b.eos_head_ggml_ms;
+''',
+    '''        b.reset_cache_ms + b.cached_step_ms + b.sample_head_matvec_ms +
+        b.sample_head_ggml_ms + b.sample_select_ms + b.eos_head_matvec_ms +
+        b.eos_head_ggml_ms;
+''',
+    "keep frame-level benchmark accounting stable",
+)
+
 path.write_text(text, encoding="utf-8")
 
 final = path.read_text(encoding="utf-8")
@@ -323,6 +338,7 @@ required = (
     "OpenCL fused post-attention graph compute failed.",
     "host_roundtrip_between_o_and_ffn=0",
     "fused_post_attn_ms",
+    "use_ggml_heads = true;",
 )
 missing = [fragment for fragment in required if fragment not in final]
 if missing:
