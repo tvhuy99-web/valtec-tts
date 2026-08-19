@@ -221,7 +221,8 @@ def main() -> None:
         final_service: (
             "VieNeuNative.synthesizeDirect(",
             "system_tts.pcm_cache.hit",
-            "system_tts.callback_rejected_as_cancel",
+            "system_tts.warm.preempt_requested",
+            '"outcome" to "cancelled"',
             '"utterance_split" to false',
             '"audio_transport" to "jni_float_direct"',
         ),
