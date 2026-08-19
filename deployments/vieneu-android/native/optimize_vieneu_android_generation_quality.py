@@ -8,9 +8,6 @@ if len(sys.argv) != 2:
     raise SystemExit('usage: optimize_vieneu_android_generation_quality.py <vieneu-source-dir>')
 
 native_dir = Path(__file__).resolve().parent
-batch2 = native_dir / 'optimize_vieneu_android_acoustic_batch2.py'
-runpy.run_path(str(batch2), run_name='__main__')
-
 core = native_dir / 'optimize_vieneu_android_generation_quality_core.py'
 runpy.run_path(str(core), run_name='__main__')
 
@@ -116,4 +113,4 @@ runpy.run_path(str(system_tts_core), run_name='__main__')
 system_tts_ui = native_dir / 'patch_vieneu_android_system_tts_ui.py'
 runpy.run_path(str(system_tts_ui), run_name='__main__')
 
-print('Applied F32 acoustic batch2, VieNeu generation quality core, preallocated ONNX denoiser outputs, system-TTS cancellation and UI hooks')
+print('Applied VieNeu generation quality core, preallocated ONNX denoiser outputs, system-TTS cancellation and UI hooks')
