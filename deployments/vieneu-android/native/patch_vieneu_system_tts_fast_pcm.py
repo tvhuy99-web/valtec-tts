@@ -45,7 +45,7 @@ def apply_post_direct_patches() -> None:
     here = pathlib.Path(__file__).resolve().parent
     run_patch(here / "patch_vieneu_system_tts_process_state.py", str(root))
     run_patch(
-        here / "patch_vieneu_system_tts_early_audio.py",
+        here / "patch_vieneu_system_tts_early_audio_v2.py",
         str(materialized_source_dir()),
         str(root),
     )
